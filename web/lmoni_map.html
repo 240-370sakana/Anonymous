@@ -1,0 +1,791 @@
+<!-- Created: 2026-05-20 JST -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>長周期地震動モニタ abrspmx_s</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="../css/quakeview.css">
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+</head>
+<body class="rtm-body">
+
+<!-- ── ヘッダー ──────────────────────────────────────────────── -->
+<header class="rtm-header">
+  <h1>長周期地震動モニタ <small>abrspmx_s</small></h1>
+  <a href="realtime_map.html" class="btn">← 強震モニタ</a>
+  <div class="rtm-status-bar">
+    <span id="lmoni-fetch-indicator" class="rtm-indicator"></span>
+    <span id="lmoni-clock"></span>
+    <span id="lmoni-img-time" class="lmoni-img-time"></span>
+    <span id="lmoni-error-msg" class="rtm-error-msg"></span>
+  </div>
+</header>
+
+<!-- ── メインエリア ──────────────────────────────────────────── -->
+<div class="rtm-main">
+
+  <!-- 左サイドバー -->
+  <aside class="rtm-sidebar">
+
+    <!-- ── 参照画像 ── -->
+    <span class="section-label">参照画像</span>
+    <div class="lmoni-ref-wrap">
+      <img id="lmoni-ref-img" class="lmoni-ref-img" alt="長周期地震動モニタ">
+    </div>
+
+    <div class="rtm-divider"></div>
+
+    <!-- ── 観測点詳細 ── -->
+    <span class="section-label">観測点詳細</span>
+    <div id="lmoni-detail-content">
+      <p class="rtm-placeholder">地図上の点を選択</p>
+    </div>
+
+    <div class="rtm-divider"></div>
+
+    <!-- ── 上位5観測点 ── -->
+    <span class="section-label">上位5観測点</span>
+    <div id="lmoni-top5-list"></div>
+
+    <div class="rtm-divider"></div>
+
+    <!-- ── 検出色 ── -->
+    <span class="section-label">検出色</span>
+    <div id="lmoni-color-palette" class="lmoni-palette"></div>
+
+  </aside>
+
+  <!-- MapLibre マップ -->
+  <div class="rtm-map-wrap">
+    <div id="lmoni-map" class="rtm-map-area"></div>
+  </div>
+
+</div>
+
+<script>
+'use strict';
+
+// ============================================================
+// 定数
+// ============================================================
+
+const LMONI_IMG_BASE = 'https://www.lmoni.bosai.go.jp/monitor/data/data/map_img/RealTimeImg/abrspmx_s';
+
+/** GIF 画像のデフォルトサイズ（Canvas 生成時のフォールバック） */
+const LMONI_IMG_DEFAULT = { w: 352, h: 400 };
+
+const STALE_MS = 10000;
+
+/** CARTO dark タイルスタイル */
+const CARTO_DARK_STYLE = {
+  version: 8,
+  sources: { carto: { type: 'raster',
+    tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
+    tileSize: 256, attribution: '©OpenStreetMap ©CARTO | 長周期地震動モニタ: 防災科研' }},
+  layers: [{ id: 'carto', type: 'raster', source: 'carto' }]
+};
+
+
+// ============================================================
+// ① 純粋ロジック関数（副作用なし・グローバル変数参照なし）
+// ============================================================
+
+/**
+ * UNIX ms → JST タイムスタンプ文字列 "yyyymmddhhmmss"
+ */
+function buildLmoniTimestamp(nowMs) {
+  const jst = new Date(nowMs + 9 * 60 * 60 * 1000);
+  return jst.toISOString().replace(/[-T:]/g, '').slice(0, 14);
+}
+
+/**
+ * UNIX ms → lmoni GIF URL（2秒前のJSTタイムスタンプを使用）
+ */
+function buildLmoniUrl(nowMs) {
+  const ts       = buildLmoniTimestamp(nowMs - 2000);
+  const yyyymmdd = ts.slice(0, 8);
+  return `${LMONI_IMG_BASE}/${yyyymmdd}/${ts}.abrspmx_s.gif`;
+}
+
+/**
+ * R,G,B → CSS rgb() 文字列
+ */
+function rgbToStyle(r, g, b) {
+  return `rgb(${r},${g},${b})`;
+}
+
+/**
+ * R,G,B → 輝度（ITU-R BT.709）
+ */
+function calcLuminance(r, g, b) {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
+ * R,G,B → 彩度（HSV モデル）
+ */
+function calcSaturation(r, g, b) {
+  const max = Math.max(r, g, b);
+  if (max === 0) return 0;
+  return (max - Math.min(r, g, b)) / max;
+}
+
+/**
+ * 観測点の活性度スコア（彩度 × 輝度）
+ */
+function calcActivityScore(r, g, b) {
+  if (r == null) return -1;
+  return calcSaturation(r, g, b) * calcLuminance(r, g, b);
+}
+
+/**
+ * 観測点配列 → 活性度降順上位 N 件
+ */
+function calcTopN(stations, n = 5) {
+  return [...stations]
+    .filter(st => st.r != null && st.lat != null)
+    .sort((a, b) => calcActivityScore(b.r, b.g, b.b) - calcActivityScore(a.r, a.g, a.b))
+    .slice(0, n);
+}
+
+/**
+ * R,G,B → HSV オブジェクト { h: 0-360, s: 0-100, v: 0-100 }
+ */
+function calcHSV(r, g, b) {
+  const r1 = r / 255, g1 = g / 255, b1 = b / 255;
+  const max = Math.max(r1, g1, b1);
+  const min = Math.min(r1, g1, b1);
+  const d   = max - min;
+  const v   = max;
+  const s   = max === 0 ? 0 : d / max;
+  let h = 0;
+  if (d !== 0) {
+    if      (max === r1) h = ((g1 - b1) / d) % 6;
+    else if (max === g1) h = (b1 - r1) / d + 2;
+    else                 h = (r1 - g1) / d + 4;
+    h = h * 60;
+    if (h < 0) h += 360;
+  }
+  return { h: Math.round(h), s: Math.round(s * 100), v: Math.round(v * 100) };
+}
+
+/**
+ * UNIX ms → JST HH:MM:SS 文字列
+ */
+function formatJST(ms) {
+  return new Date(ms).toLocaleTimeString('ja-JP', {
+    hour12: false, timeZone: 'Asia/Tokyo',
+  });
+}
+
+/**
+ * "yyyymmddhhmmss" → 読みやすい日時文字列
+ */
+function formatTimestamp(ts) {
+  if (!ts || ts.length < 14) return ts || '-';
+  return `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)} ` +
+         `${ts.slice(8,10)}:${ts.slice(10,12)}:${ts.slice(12,14)} JST`;
+}
+
+/**
+ * 最終更新からの経過でデータの陳腐化を判定する
+ */
+function isStale(lastMs, nowMs, thresholdMs) {
+  return lastMs !== null && (nowMs - lastMs) > thresholdMs;
+}
+
+/**
+ * RGB → マーカー半径（彩度が高いほど大きく）
+ */
+function calcMarkerRadius(r, g, b, zoom) {
+  const scale = zoom >= 8 ? 1.0 : 0.6;
+  if (r == null) return Math.max(2, Math.round(5 * scale));
+  const sat = calcSaturation(r, g, b);
+  return Math.max(2, Math.round((6 + sat * 2) * scale));
+}
+
+/**
+ * Canvas の全ピクセルを走査し、量子化済み色 → 出現回数の Map を返す
+ */
+function analyzeImageColors(ctx, w, h, step = 32) {
+  const data   = ctx.getImageData(0, 0, w, h).data;
+  const counts = new Map();
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i]     - (data[i]     % step);
+    const g = data[i + 1] - (data[i + 1] % step);
+    const b = data[i + 2] - (data[i + 2] % step);
+    const k = `${r},${g},${b}`;
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * 2つの色カウント Map を合算して新しい Map を返す（累積学習用）
+ */
+function mergeColorCounts(accumulated, newColors) {
+  const merged = new Map(accumulated);
+  for (const [k, n] of newColors) merged.set(k, (merged.get(k) || 0) + n);
+  return merged;
+}
+
+/**
+ * 色カウント Map → 彩度フィルタ済み・出現頻度上位を色相順に並べた配列
+ */
+function colorMapToHueSorted(colorMap, limit = 64) {
+  const entries = [];
+  for (const [k, count] of colorMap) {
+    const [r, g, b] = k.split(',').map(Number);
+    if (calcSaturation(r, g, b) < 0.15) continue;
+    if (Math.max(r, g, b) < 20)         continue;
+    entries.push({ r, g, b, count });
+  }
+  entries.sort((a, b) => b.count - a.count);
+  const top = entries.slice(0, limit);
+  top.sort((a, b) => calcHSV(a.r, a.g, a.b).h - calcHSV(b.r, b.g, b.b).h);
+  return top;
+}
+
+/**
+ * 色カウント Map → localStorage に保存できる JSON 文字列
+ */
+function serializeColorMap(map) {
+  return JSON.stringify([...map.entries()]);
+}
+
+/**
+ * JSON 文字列 → 色カウント Map（パース失敗時は空の Map）
+ */
+function deserializeColorMap(str) {
+  try { return new Map(JSON.parse(str)); } catch { return new Map(); }
+}
+
+/**
+ * station.csv テキスト → 観測点配列（Shift-JIS は呼び出し元でデコード済み前提）
+ */
+function parseStationCsv(csvText) {
+  return csvText.trim().split('\n').slice(1).map(line => {
+    const cols = line.split(',');
+    const lat  = parseFloat(cols[4]);
+    const lon  = parseFloat(cols[5]);
+    const px   = parseInt(cols[2], 10);
+    const py   = parseInt(cols[3], 10);
+    return {
+      code: cols[0]?.trim(),
+      name: cols[1]?.trim() || cols[0]?.trim(),
+      lat:  isNaN(lat) ? null : lat,
+      lon:  isNaN(lon) ? null : lon,
+      px:   isNaN(px)  ? null : px,
+      py:   isNaN(py)  ? null : py,
+      r: null, g: null, b: null,
+    };
+  }).filter(st => st.code && st.lat !== null);
+}
+
+
+// ============================================================
+// ② 描画関数（DOM操作のみ・引数で受け取る）
+// ============================================================
+
+/* ─── DualScale コントロール（MapLibre） ─── */
+function haversineKmForScale(lat1, lon1, lat2, lon2) {
+  const R = 6371, dLat = (lat2 - lat1) * Math.PI / 180, dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+class DualScaleControl {
+  onAdd(map) {
+    this._map = map;
+    const w = document.createElement('div');
+    w.className = 'maplibregl-ctrl ds-wrap';
+    this._latLabel = document.createElement('div');
+    this._latLabel.className = 'ds-lat-label';
+    this._L = document.createElement('div');
+    this._L.className = 'ds-L';
+    this._lonLabel = document.createElement('div');
+    this._lonLabel.className = 'ds-lon-label';
+    w.appendChild(this._latLabel);
+    w.appendChild(this._L);
+    w.appendChild(this._lonLabel);
+    this._update = this._update.bind(this);
+    map.on('zoomend', this._update);
+    map.on('moveend', this._update);
+    setTimeout(() => this._update(), 0);
+    return w;
+  }
+  onRemove() {
+    this._map.off('zoomend', this._update);
+    this._map.off('moveend', this._update);
+  }
+  _niceKm(km) {
+    const e = Math.pow(10, Math.floor(Math.log10(km)));
+    const f = km / e;
+    return f < 1.5 ? e : f < 3.5 ? 2 * e : f < 7.5 ? 5 * e : 10 * e;
+  }
+  _fmtKm(km) { return km >= 1 ? km + ' km' : Math.round(km * 1000) + ' m'; }
+  _update() {
+    const map = this._map;
+    const c = map.getCanvas();
+    const cx = c.offsetWidth / 2, cy = c.offsetHeight / 2, ref = 100;
+    const ll0 = map.unproject([cx, cy]);
+    const llE = map.unproject([cx + ref, cy]);
+    const llN = map.unproject([cx, cy - ref]);
+    const kpLon = haversineKmForScale(ll0.lat, ll0.lng, ll0.lat, llE.lng) / ref;
+    const kpLat = haversineKmForScale(ll0.lat, ll0.lng, llN.lat, ll0.lng) / ref;
+    const t = this._niceKm((kpLon + kpLat) / 2 * 80);
+    const lp = Math.max(10, Math.round(t / kpLon));
+    const latp = Math.max(10, Math.round(t / kpLat));
+    this._L.style.width = lp + 'px';
+    this._L.style.height = latp + 'px';
+    this._lonLabel.style.width = lp + 'px';
+    this._latLabel.textContent = 'N-S ' + this._fmtKm(t);
+    this._lonLabel.textContent = 'E-W ' + this._fmtKm(t);
+  }
+}
+
+function addDualScaleBar(map) {
+  map.addControl(new DualScaleControl(), 'bottom-left');
+}
+
+/**
+ * グラチキュール（緯度経度グリッド）を追加する（MapLibre）
+ */
+function addGraticule(map) {
+  function gridStep(z) {
+    if (z >= 10) return 0.1; if (z >= 9) return 0.5; if (z >= 8) return 1;
+    if (z >= 6) return 2;   if (z >= 4) return 5;  return 10;
+  }
+  function fmtLat(v) { const a = Math.abs(v); return (a % 1 === 0 ? a.toFixed(0) : a.toFixed(2)) + (v >= 0 ? '°N' : '°S'); }
+  function fmtLon(v) { const n = ((v % 360) + 360) % 360, d = n > 180 ? n - 360 : n, a = Math.abs(d); return (a % 1 === 0 ? a.toFixed(0) : a.toFixed(2)) + (d >= 0 ? '°E' : '°W'); }
+
+  function buildLines() {
+    const step = gridStep(map.getZoom()), features = [];
+    for (let lat = -90; lat <= 90; lat = +(lat + step).toFixed(9))
+      features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[-180, lat], [180, lat]] } });
+    for (let lon = -180; lon <= 180; lon = +(lon + step).toFixed(9))
+      features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[lon, -90], [lon, 90]] } });
+    return { type: 'FeatureCollection', features };
+  }
+
+  const labelDiv = document.createElement('div');
+  labelDiv.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;';
+  map.getCanvasContainer().appendChild(labelDiv);
+
+  function buildLabels() {
+    labelDiv.innerHTML = '';
+    const b = map.getBounds(), step = gridStep(map.getZoom());
+    const latMin = Math.ceil(b.getSouth() / step) * step;
+    const latMax = Math.floor(b.getNorth() / step) * step;
+    const lonMin = Math.ceil(b.getWest() / step) * step;
+    const lonMax = Math.floor(b.getEast() / step) * step;
+    for (let lat = latMin; lat <= latMax + 1e-9; lat = +(lat + step).toFixed(9)) {
+      if (lat < -90 || lat > 90) continue;
+      const { x, y } = map.project([b.getWest(), lat]);
+      const d = document.createElement('div');
+      d.className = 'gr-label gr-lat-label';
+      d.textContent = fmtLat(lat);
+      d.style.cssText = `position:absolute;left:${x + 2}px;top:${y - 8}px;`;
+      labelDiv.appendChild(d);
+    }
+    for (let lon = lonMin; lon <= lonMax + 1e-9; lon = +(lon + step).toFixed(9)) {
+      const { x, y } = map.project([lon, b.getSouth()]);
+      const d = document.createElement('div');
+      d.className = 'gr-label gr-lon-label';
+      d.textContent = fmtLon(lon);
+      d.style.cssText = `position:absolute;left:${x - 30}px;top:${y + 2}px;`;
+      labelDiv.appendChild(d);
+    }
+  }
+
+  map.addSource('graticule', { type: 'geojson', data: buildLines() });
+  map.addLayer({ id: 'graticule', type: 'line', source: 'graticule',
+    paint: { 'line-color': 'rgba(100,160,220,0.18)', 'line-width': 1 } });
+
+  function redraw() { map.getSource('graticule').setData(buildLines()); buildLabels(); }
+  map.on('zoomend', redraw);
+  map.on('moveend', buildLabels);
+  buildLabels();
+}
+
+/**
+ * フェッチインジケーターと通信エラーテキストを更新する
+ */
+function updateFetchStatus(indicatorEl, errorEl, { status, message = '' }) {
+  indicatorEl.className = 'rtm-indicator' + (status !== 'ok' ? ` ${status}` : '');
+  errorEl.textContent   = message;
+}
+
+/**
+ * ヘッダー時計を更新する
+ */
+function updateClock(clockEl, ms) {
+  clockEl.textContent = formatJST(ms);
+}
+
+/**
+ * 画像タイムスタンプ表示を更新する
+ */
+function updateImgTime(el, ts) {
+  el.textContent = ts ? formatTimestamp(ts) : '-';
+}
+
+/**
+ * 観測点詳細パネルを更新する
+ */
+function updateDetailPanel(containerEl, station) {
+  if (!station) {
+    containerEl.innerHTML = `<p class="rtm-placeholder">地図上の点を選択</p>`;
+    return;
+  }
+  const hasColor  = station.r != null;
+  const rgbLabel  = hasColor ? `R:${station.r} G:${station.g} B:${station.b}` : '観測なし';
+  const color     = hasColor ? rgbToStyle(station.r, station.g, station.b) : 'var(--text-mid)';
+  const hsv       = hasColor ? calcHSV(station.r, station.g, station.b) : null;
+  const hsvLabel  = hsv ? `H:${hsv.h} S:${hsv.s}% V:${hsv.v}%` : '-';
+  containerEl.innerHTML =
+    `<div class="rtm-detail-row">` +
+      `<span class="rtm-detail-name">${station.name || station.code}</span>` +
+    `</div>` +
+    `<div class="rtm-detail-row">` +
+      `<span class="rtm-detail-name">RGB</span>` +
+      `<span class="rtm-detail-si" style="color:${color}">${rgbLabel}</span>` +
+    `</div>` +
+    `<div class="rtm-detail-row">` +
+      `<span class="rtm-detail-name">HSV</span>` +
+      `<span class="rtm-detail-si">${hsvLabel}</span>` +
+    `</div>`;
+}
+
+/**
+ * 上位5観測点リストを描画する
+ */
+function renderTopN(containerEl, topStations) {
+  if (!containerEl) return;
+  if (!topStations.length) {
+    containerEl.innerHTML = `<p class="rtm-placeholder">観測なし</p>`;
+    return;
+  }
+  // 動的カラーマップのため style 属性を直接使用（設計上の例外）
+  containerEl.innerHTML = topStations.map(st => {
+    const color = rgbToStyle(st.r, st.g, st.b);
+    return `<div class="rtm-top5-item">` +
+      `<span class="rtm-top5-swatch" style="background:${color}"></span>` +
+      `<span class="rtm-top5-name">${st.name || st.code}</span>` +
+      `<span class="rtm-top5-val" style="color:${color}">R${st.r} G${st.g} B${st.b}</span>` +
+    `</div>`;
+  }).join('');
+}
+
+/**
+ * 検出色パレットを描画する
+ */
+function renderColorPalette(containerEl, colorMap) {
+  if (!containerEl) return;
+  const colors = colorMapToHueSorted(colorMap, 64);
+  if (!colors.length) {
+    containerEl.innerHTML = '<p class="rtm-placeholder">学習中...</p>';
+    return;
+  }
+  containerEl.innerHTML = colors.map(({ r, g, b, count }) =>
+    `<span class="lmoni-palette-swatch" style="background:${rgbToStyle(r,g,b)}" ` +
+    `title="R:${r} G:${g} B:${b} (${count})"></span>`
+  ).join('');
+}
+
+/**
+ * 観測点 GeoJSON を更新する（MapLibre setData）
+ * 各観測点のスタイルは properties に格納する
+ */
+function updateLmoniStationsSource(mapInst, stations, zoom, selectedCode) {
+  const source = mapInst.getSource('stations');
+  if (!source) return;
+
+  const features = stations
+    .filter(st => st.lat != null && st.lon != null)
+    .sort((a, b) => calcActivityScore(a.r, a.g, a.b) - calcActivityScore(b.r, b.g, b.b))
+    .map(st => {
+      const radius = calcMarkerRadius(st.r, st.g, st.b, zoom);
+      const hasColor = st.r != null;
+      const color       = hasColor ? rgbToStyle(st.r, st.g, st.b) : '#444c56';
+      const strokeColor = hasColor ? '#000'    : '#768390';
+      const strokeWidth = hasColor ? 0.5       : 0.8;
+      const opacity     = hasColor ? 0.95      : 0.9;
+      return {
+        type: 'Feature',
+        id: st.code,
+        geometry: { type: 'Point', coordinates: [st.lon, st.lat] },
+        properties: {
+          code: st.code,
+          name: st.name,
+          r: st.r, g: st.g, b: st.b,
+          color, radius, opacity, strokeColor, strokeWidth,
+        },
+      };
+    });
+
+  source.setData({ type: 'FeatureCollection', features });
+}
+
+
+// ============================================================
+// ③ 統合用エントリ関数
+// ============================================================
+
+/**
+ * Blob URL の GIF を Canvas に描画して { ctx, w, h } を返す（非同期）
+ */
+async function loadGifCanvas(blobUrl) {
+  const img = await new Promise((resolve, reject) => {
+    const i  = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = reject;
+    i.src    = blobUrl;
+  });
+  const w   = img.naturalWidth  || LMONI_IMG_DEFAULT.w;
+  const h   = img.naturalHeight || LMONI_IMG_DEFAULT.h;
+  const cnv = document.createElement('canvas');
+  cnv.width  = w;
+  cnv.height = h;
+  const ctx  = cnv.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0);
+  return { ctx, w, h };
+}
+
+/**
+ * Canvas から各観測点のピクセル色をサンプリングする（同期）
+ */
+function sampleStationColors({ ctx, w, h }, stations) {
+  return stations.map(st => {
+    const px = st.px, py = st.py;
+    if (px == null || py == null) return { ...st, r: null, g: null, b: null };
+    if (px < 0 || py < 0 || px >= w || py >= h) return { ...st, r: null, g: null, b: null };
+    const d = ctx.getImageData(px, py, 1, 1).data;
+    return { ...st, r: d[0], g: d[1], b: d[2] };
+  });
+}
+
+/**
+ * lmoni GIF を取得して地図・サイドバーを一括更新する
+ */
+async function pollLmoni(mapInst, state, els, allStations) {
+  const nowMs = Date.now();
+  const url   = buildLmoniUrl(nowMs);
+  const ts    = buildLmoniTimestamp(nowMs - 2000);
+
+  let res;
+  try {
+    res = await fetch(`/proxy?url=${encodeURIComponent(url)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch (e) {
+    updateFetchStatus(els.indicator, els.errorMsg, {
+      status: 'error', message: `取得失敗: ${e.message}`,
+    });
+    return;
+  }
+
+  const blob    = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+
+  // 参照画像を更新（前のBlobURLを解放してから差し替え）
+  if (els.refImg._prevBlobUrl) URL.revokeObjectURL(els.refImg._prevBlobUrl);
+  els.refImg._prevBlobUrl = blobUrl;
+  els.refImg.src          = blobUrl;
+
+  updateFetchStatus(els.indicator, els.errorMsg, { status: 'ok' });
+  updateImgTime(els.imgTime, ts);
+  state.lastUpdateMs = nowMs;
+
+  let canvas;
+  try {
+    canvas = await loadGifCanvas(blobUrl);
+  } catch (e) {
+    console.warn('[lmoni] canvas load failed:', e.message);
+    return;
+  }
+  const colored = sampleStationColors(canvas, allStations);
+
+  const newColors = analyzeImageColors(canvas.ctx, canvas.w, canvas.h);
+  state.learnedColors = mergeColorCounts(state.learnedColors, newColors);
+  renderColorPalette(els.palette, state.learnedColors);
+
+  const zoom = mapInst.getZoom();
+  updateLmoniStationsSource(mapInst, colored, zoom, state.selectedCode);
+
+  if (state.selectedCode) {
+    const sel = colored.find(s => s.code === state.selectedCode);
+    if (sel) updateDetailPanel(els.detail, sel);
+  }
+
+  renderTopN(els.top5, calcTopN(colored));
+  state.stations = colored;
+}
+
+/**
+ * このHTML固有の DOM 要素を収集する
+ */
+function collectLmoniEls(root = document) {
+  const $ = id => (typeof root.getElementById === 'function'
+    ? root.getElementById(id)
+    : root.querySelector('#' + id));
+  return {
+    indicator: $('lmoni-fetch-indicator'),
+    errorMsg:  $('lmoni-error-msg'),
+    clock:     $('lmoni-clock'),
+    imgTime:   $('lmoni-img-time'),
+    detail:    $('lmoni-detail-content'),
+    top5:      $('lmoni-top5-list'),
+    palette:   $('lmoni-color-palette'),
+    refImg:    $('lmoni-ref-img'),
+    mapEl:     $('lmoni-map'),
+  };
+}
+
+/**
+ * lmoni モニタを初期化する（MapLibre GL JS）
+ */
+async function initLmoniMap(els) {
+  const mapInst = new maplibregl.Map({
+    container: els.mapEl,
+    style: CARTO_DARK_STYLE,
+    center: [135.5, 34.5],  // [lon, lat]
+    zoom: 4.3,
+  });
+  mapInst.addControl(new maplibregl.NavigationControl(), 'top-right');
+  addDualScaleBar(mapInst);
+
+  const _saved      = localStorage.getItem('lmoni_learned_colors');
+  const state       = {
+    selectedCode: null, lastUpdateMs: null, stations: [],
+    learnedColors: _saved ? deserializeColorMap(_saved) : new Map(),
+  };
+  renderColorPalette(els.palette, state.learnedColors);
+
+  // CSV fetch と map load を並列で待つ（先に load を登録してレースコンディションを防ぐ）
+  const [allStations] = await Promise.all([
+    fetch('../data/stations.csv')
+      .then(r => r.arrayBuffer())
+      .then(buf => parseStationCsv(new TextDecoder('shift-jis').decode(buf))),
+    new Promise(resolve => mapInst.on('load', resolve)),
+  ]);
+
+  // 観測点 GeoJSON ソース + circle レイヤー
+  mapInst.addSource('stations', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+  mapInst.addLayer({
+    id: 'stations',
+    type: 'circle',
+    source: 'stations',
+    paint: {
+      'circle-radius':       ['get', 'radius'],
+      'circle-color':        ['get', 'color'],
+      'circle-opacity':      ['get', 'opacity'],
+      'circle-stroke-color': ['get', 'strokeColor'],
+      'circle-stroke-width': ['get', 'strokeWidth'],
+    },
+  });
+
+  // グラチキュール
+  addGraticule(mapInst);
+
+  // ズームイベント: zoom-high クラス制御 + マーカー再描画
+  mapInst.on('zoomend', () => {
+    const z = mapInst.getZoom();
+    mapInst.getContainer().classList.toggle('zoom-high', z >= 9);
+    if (state.stations.length) {
+      updateLmoniStationsSource(mapInst, state.stations, z, state.selectedCode);
+    }
+  });
+
+  // Tooltip（観測点ホバー）
+  let tooltip = null;
+  mapInst.on('mouseenter', 'stations', e => {
+    const p = e.features[0].properties;
+    const rgb = p.r != null ? `R:${p.r} G:${p.g} B:${p.b}` : '観測なし';
+    tooltip = new maplibregl.Popup({
+      closeButton: false, closeOnClick: false, offset: [0, -6],
+    })
+      .setLngLat(e.lngLat)
+      .setHTML(`<div class="rtm-station-tooltip"><b>${p.name}</b><br>${p.code}<br>${rgb}</div>`)
+      .addTo(mapInst);
+    mapInst.getCanvas().style.cursor = 'pointer';
+  });
+  mapInst.on('mouseleave', 'stations', () => {
+    if (tooltip) { tooltip.remove(); tooltip = null; }
+    mapInst.getCanvas().style.cursor = '';
+  });
+
+  // 観測点クリック
+  mapInst.on('click', 'stations', e => {
+    const p = e.features[0].properties;
+    state.selectedCode = p.code;
+    updateDetailPanel(els.detail, {
+      code: p.code,
+      name: p.name,
+      r: p.r != null ? parseInt(p.r) : null,
+      g: p.g != null ? parseInt(p.g) : null,
+      b: p.b != null ? parseInt(p.b) : null,
+    });
+  });
+
+  let polling = false;
+
+  async function poll() {
+    if (polling) return;
+    polling = true;
+    try {
+      await pollLmoni(mapInst, state, els, allStations);
+      localStorage.setItem('lmoni_learned_colors', serializeColorMap(state.learnedColors));
+    } finally {
+      polling = false;
+    }
+  }
+
+  function tick() {
+    updateClock(els.clock, Date.now());
+    if (isStale(state.lastUpdateMs, Date.now(), STALE_MS)) {
+      updateFetchStatus(els.indicator, els.errorMsg, { status: 'stale', message: '' });
+    }
+  }
+
+  return { mapInst, poll, tick };
+}
+
+
+// ============================================================
+// スタンドアロン実行ブロック
+// ─────────────────────────────────────────────────────────────
+// QuakeView_personal に統合する場合はこのブロックを削除し、
+// 既存メインループから lmoni.poll() / lmoni.tick() を呼ぶこと。
+// ============================================================
+document.addEventListener('DOMContentLoaded', async () => {
+  const els   = collectLmoniEls(document);
+  const lmoni = await initLmoniMap(els);
+
+  lmoni.poll();
+  lmoni.tick();
+
+  // QuakeView_personal 統合時はこの setInterval を削除する
+  setInterval(() => {
+    lmoni.poll();
+    lmoni.tick();
+  }, 1000);
+});
+
+/* ═══ 統合ガイド ═══════════════════════════════════════════════
+  読み込む場所  : personal.html の <script src="web/lmoni_map.html"> に相当する形で組み込む
+  呼び出す場所  : 既存ループの tick() 内で lmoni.poll() / lmoni.tick() を呼び出す
+  渡す引数      : collectLmoniEls(root) の戻り値
+  追加するDOM   : lmoni-map / lmoni-ref-img / lmoni-detail-content / lmoni-top5-list
+  プロキシ要件  : サーバーの /proxy?url= エンドポイントが必要（CORS 回避）
+  ピクセル座標  : station.csv の pixel_x / pixel_y をそのまま使用（特定作業完了後に反映）
+════════════════════════════════════════════════════════════════ */
+</script>
+</body>
+</html>

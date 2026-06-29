@@ -1,0 +1,720 @@
+<!-- Created: 2026-06-26 JST -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>強震モニタ 履歴再生 — ダウンロード＆リプレイ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="../css/quakeview.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+</head>
+<body class="rtm-body">
+
+<!-- ── ヘッダー ──────────────────────────────────────────────── -->
+<header class="rtm-header">
+  <h1>⏪ 強震モニタ <small>履歴再生</small></h1>
+  <div class="rtm-status-bar">
+    <span id="mhv-fetch-indicator" class="rtm-indicator"></span>
+    <span id="mhv-clock" class="mhv-clock">--:--:--</span>
+    <span id="mhv-error-msg" class="rtm-error-msg"></span>
+  </div>
+</header>
+
+<!-- ── メインエリア ──────────────────────────────────────────── -->
+<div class="rtm-main">
+
+  <!-- 左サイドバー -->
+  <aside class="rtm-sidebar">
+
+    <!-- ── 取得設定 ── -->
+    <span class="section-label">データ取得</span>
+    <div class="mhv-form">
+      <label class="mhv-field">
+        <span class="mhv-field-label">モニタ</span>
+        <select id="mhv-monitor">
+          <option value="kyoshin">強震モニタ（震度）</option>
+          <option value="longperiod">長周期地震動モニタ</option>
+        </select>
+      </label>
+      <label class="mhv-field">
+        <span class="mhv-field-label">開始</span>
+        <input type="datetime-local" id="mhv-start" step="1">
+      </label>
+      <label class="mhv-field">
+        <span class="mhv-field-label">終了</span>
+        <input type="datetime-local" id="mhv-end" step="1">
+      </label>
+      <button id="mhv-download-btn" class="btn-primary mhv-download-btn">ダウンロード</button>
+      <div class="mhv-progress" hidden>
+        <div id="mhv-progress-fill" class="mhv-progress-fill"></div>
+      </div>
+      <p id="mhv-status-text" class="mhv-status-text">期間を指定して取得してください（最大120分）。</p>
+    </div>
+
+    <div class="rtm-divider"></div>
+
+    <!-- ── 保存済みデータ（再ダウンロード不要） ── -->
+    <span class="section-label">保存済みデータ</span>
+    <div class="mhv-form">
+      <select id="mhv-cache-select">
+        <option value="">— ダウンロード済みデータ —</option>
+      </select>
+      <button id="mhv-load-btn" class="btn mhv-load-btn" disabled>このデータを読み込む</button>
+    </div>
+
+    <div class="rtm-divider"></div>
+
+    <!-- ── 観測点詳細 ── -->
+    <span class="section-label">観測点詳細</span>
+    <div id="mhv-detail-content">
+      <p class="rtm-placeholder">地図上の点を選択</p>
+    </div>
+
+    <div class="rtm-divider"></div>
+
+    <!-- ── 上位5位 ── -->
+    <span class="section-label">上位5位</span>
+    <div id="mhv-top5-list">
+      <p class="rtm-placeholder">データ未取得</p>
+    </div>
+
+  </aside>
+
+  <!-- Leaflet マップ + 凡例オーバーレイ -->
+  <div class="rtm-map-wrap">
+    <div id="mhv-map" class="rtm-map-area"></div>
+    <div class="rtm-legend-overlay">
+      <span id="mhv-legend-title" class="rtm-legend-overlay-title">リアルタイム震度</span>
+      <div id="mhv-legend-items"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── トランスポート（再生コントロール） ─────────────────────── -->
+<div class="mhv-transport">
+  <button id="mhv-prev" class="btn mhv-transport-btn" title="前のフレーム">⏮</button>
+  <button id="mhv-play" class="btn mhv-transport-btn mhv-play-btn" title="再生 / 一時停止">▶</button>
+  <button id="mhv-next" class="btn mhv-transport-btn" title="次のフレーム">⏭</button>
+  <input type="range" id="mhv-slider" class="mhv-slider" min="0" max="0" value="0" step="1" disabled>
+  <span id="mhv-frame-time" class="mhv-frame-time">--:--:--</span>
+  <span id="mhv-counter" class="mhv-counter">0 / 0</span>
+  <label class="mhv-speed-field">
+    <span class="mhv-field-label">速度</span>
+    <select id="mhv-speed">
+      <option value="1">×1</option>
+      <option value="2">×2</option>
+      <option value="5" selected>×5</option>
+      <option value="10">×10</option>
+      <option value="20">×20</option>
+    </select>
+  </label>
+  <label class="mhv-loop-field">
+    <input type="checkbox" id="mhv-loop"> ループ
+  </label>
+</div>
+
+<script>
+'use strict';
+
+// ============================================================
+// ① 純粋ロジック関数（副作用なし・グローバル変数参照なし）
+// ============================================================
+
+// ── 震度カラーマップ（NIED 強震モニタ準拠, SI: -3.0〜7.0, step 0.1） ──
+const SHINDO_COLORMAP = [
+  [  0,  0,205],[  0,  7,209],[  0, 14,214],[  0, 21,218],[  0, 28,223],
+  [  0, 36,227],[  0, 43,231],[  0, 50,236],[  0, 57,240],[  0, 64,245],
+  [  0, 72,250],[  0, 85,238],[  0, 99,227],[  0,112,216],[  0,126,205],
+  [  0,140,194],[  0,153,183],[  0,167,172],[  0,180,161],[  0,194,150],
+  [  0,208,139],[  6,212,130],[ 12,216,121],[ 18,220,113],[ 25,224,104],
+  [ 31,228, 96],[ 37,233, 88],[ 44,237, 79],[ 50,241, 71],[ 56,245, 62],
+  [ 63,250, 54],[ 75,250, 49],[ 88,250, 45],[100,251, 41],[113,251, 37],
+  [125,252, 33],[138,252, 28],[151,253, 24],[163,253, 20],[176,254, 16],
+  [189,255, 12],[195,254, 10],[202,254,  9],[208,254,  8],[215,254,  7],
+  [222,255,  5],[228,254,  4],[235,255,  3],[241,254,  2],[248,255,  1],
+  [255,255,  0],[254,251,  0],[254,248,  0],[254,244,  0],[254,241,  0],
+  [255,238,  0],[254,234,  0],[255,231,  0],[254,227,  0],[255,224,  0],
+  [255,221,  0],[254,213,  0],[254,205,  0],[254,197,  0],[254,190,  0],
+  [255,182,  0],[254,174,  0],[255,167,  0],[254,159,  0],[255,151,  0],
+  [255,144,  0],[254,136,  0],[254,128,  0],[254,121,  0],[254,113,  0],
+  [255,106,  0],[254, 98,  0],[255, 90,  0],[254, 83,  0],[255, 75,  0],
+  [255, 68,  0],[254, 61,  0],[253, 54,  0],[252, 47,  0],[251, 40,  0],
+  [250, 33,  0],[249, 27,  0],[248, 20,  0],[247, 13,  0],[246,  6,  0],
+  [245,  0,  0],[238,  0,  0],[230,  0,  0],[223,  0,  0],[215,  0,  0],
+  [208,  0,  0],[200,  0,  0],[192,  0,  0],[185,  0,  0],[177,  0,  0],
+  [170,  0,  0],
+];
+const SI_MIN  = -3.0;
+const SI_STEP =  0.1;
+
+/** 震度スケール凡例エントリ */
+const LEGEND_ENTRIES = [
+  { si: 7.0, label: '7'  }, { si: 6.5, label: '6強' },
+  { si: 6.0, label: '6弱' }, { si: 5.5, label: '5強' },
+  { si: 5.0, label: '5弱' }, { si: 4.0, label: '4'  },
+  { si: 3.0, label: '3'  }, { si: 2.0, label: '2'  },
+  { si: 1.0, label: '1'  }, { si: 0.0, label: '0'  },
+];
+
+/** Leaflet マップデフォルト設定 */
+const MHV_DEFAULT_MAP_OPTIONS = {
+  center: [36.5, 136.0],
+  zoom:   5,
+  tileUrl: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  tileAttr: '&copy; CARTO | 強震モニタ: 防災科研',
+};
+
+/** 再生速度(×) → 1フレームあたりの待ち時間(ms)。フレームは1秒間隔 */
+function speedToIntervalMs(speed) {
+  return Math.max(40, Math.round(1000 / speed));
+}
+
+/**
+ * 震度値 → CSS rgb 文字列（NIED カラーマップ）
+ */
+function shindoToColor(si) {
+  if (si == null) return null;
+  const idx = Math.round(Math.max(0, Math.min(100, (si - SI_MIN) / SI_STEP)));
+  const [r, g, b] = SHINDO_COLORMAP[idx];
+  return `rgb(${r},${g},${b})`;
+}
+
+/**
+ * 震度値 → Leaflet CircleMarker の半径(px)
+ * realtime_map.html の shindoToRadius + calcZoomRadiusScale と同一ロジック
+ * Leaflet広域表示のため scale=0.6 を常時適用
+ */
+function shindoToRadius(si) {
+  if (si == null) return Math.max(2, Math.round(5 * 0.6));
+  return Math.max(2, Math.round((6 + Math.max(0, si - 1.0) * 2.0) * 0.6));
+}
+
+/**
+ * RGB彩度 → CircleMarker の半径(px)
+ * lmoni_map.html の calcMarkerRadius と同一ロジック
+ * Leaflet広域表示のため scale=0.6 を常時適用
+ */
+function calcSaturation(r, g, b) {
+  const max = Math.max(r, g, b);
+  if (max === 0) return 0;
+  return (max - Math.min(r, g, b)) / max;
+}
+
+function longperiodToRadius(r, g, b) {
+  if (r == null) return Math.max(2, Math.round(5 * 0.6));
+  const sat = calcSaturation(r, g, b);
+  return Math.max(2, Math.round((6 + sat * 2) * 0.6));
+}
+
+/**
+ * フレームの生値 → 描画用に正規化したオブジェクト
+ * monitor により値の意味が異なるため、ここで色・半径・ラベル・数値を確定する
+ *
+ * @param {string} monitor  'kyoshin' | 'longperiod'
+ * @param {number|Array|null} val
+ * @returns {{ hasData, label, color, radius, numeric }}
+ */
+function normalizeValue(monitor, val) {
+  if (monitor === 'kyoshin') {
+    if (val == null) return { hasData: false, label: '観測なし', color: null, radius: Math.round(5 * 0.6), numeric: null };
+    return { hasData: true, label: val.toFixed(1), color: shindoToColor(val),
+             radius: shindoToRadius(val), numeric: val };
+  }
+  // longperiod: val = [r, g, b, activity]
+  if (!val || val[0] == null) return { hasData: false, label: '観測なし', color: null, radius: Math.max(2, Math.round(5 * 0.6)), numeric: null };
+  const [r, g, b, act] = val;
+  return { hasData: true, label: act != null ? act.toFixed(1) : '-',
+           color: `rgb(${r},${g},${b})`, radius: longperiodToRadius(r, g, b), numeric: act };
+}
+
+/**
+ * フレーム → 観測値の降順 上位N件（座標・観測値あり限定）
+ *
+ * @param {Array}  stationsMeta  [{code,name,lat,lon}, ...]
+ * @param {object} frame         {time, vals:[...]}
+ * @param {string} monitor
+ * @param {number} [n=5]
+ * @returns {Array<{code,name,label,color,numeric}>}
+ */
+function calcTop5(stationsMeta, frame, monitor, n = 5) {
+  const items = [];
+  for (let i = 0; i < stationsMeta.length; i++) {
+    const v = normalizeValue(monitor, frame.vals[i]);
+    if (!v.hasData || stationsMeta[i].lat == null) continue;
+    items.push({ code: stationsMeta[i].code, name: stationsMeta[i].name,
+                 label: v.label, color: v.color, numeric: v.numeric });
+  }
+  return items.sort((a, b) => b.numeric - a.numeric).slice(0, n);
+}
+
+/**
+ * datetime-local の値を download API が解釈できる "YYYY-MM-DDTHH:MM:SS" に整える
+ * （秒を省略したブラウザ入力 "YYYY-MM-DDTHH:MM" に :00 を補う）
+ */
+function normalizeDateTimeInput(value) {
+  if (!value) return '';
+  return value.length === 16 ? value + ':00' : value;
+}
+
+/**
+ * 進捗 dict → 0〜100 のパーセント
+ */
+function calcProgressPct(status) {
+  if (!status || !status.total) return 0;
+  return Math.min(100, Math.round((status.done / status.total) * 100));
+}
+
+
+// ============================================================
+// ② 描画関数（DOM操作のみ・引数で受け取る）
+// ============================================================
+
+/**
+ * サイドバーの凡例リストを生成する（kyoshin 用 / longperiod は非表示）
+ */
+function buildLegend(titleEl, containerEl, monitor) {
+  containerEl.innerHTML = '';
+  if (monitor !== 'kyoshin') {
+    titleEl.textContent = '長周期 活性度';
+    containerEl.innerHTML =
+      `<span class="rtm-legend-label">観測点の色＝モニタ画像のRGB</span>`;
+    return;
+  }
+  titleEl.textContent = 'リアルタイム震度';
+  LEGEND_ENTRIES.forEach(({ si, label }) => {
+    const color = shindoToColor(si);
+    const item  = document.createElement('div');
+    item.className = 'rtm-legend-item';
+    // 動的カラーマップ値のため CSS 変数ではなく計算 RGB を直接使用（設計上の例外）
+    item.innerHTML =
+      `<span class="rtm-legend-swatch" style="background:${color}"></span>` +
+      `<span class="rtm-legend-label">${label}</span>`;
+    containerEl.appendChild(item);
+  });
+  const gradItem = document.createElement('div');
+  gradItem.className = 'rtm-legend-item rtm-legend-item--grad';
+  gradItem.innerHTML =
+    `<span class="rtm-legend-grad"></span>` +
+    `<span class="rtm-legend-grad-labels"><span>0</span><span>-3</span></span>`;
+  containerEl.appendChild(gradItem);
+}
+
+/**
+ * Leaflet CircleMarker を生成してキャッシュする（座標ありの観測点のみ）
+ */
+function getOrCreateMarker(mapInst, markersMap, station, onSelect, renderer) {
+  if (markersMap.has(station.code)) return markersMap.get(station.code);
+
+  const m = L.circleMarker([station.lat, station.lon], {
+    renderer,
+    radius: 3, weight: 1,
+    color: '#555', fillColor: '#222',
+    fillOpacity: 0.0, opacity: 0.0,
+  }).addTo(mapInst);
+
+  m._mhvRef = { code: station.code, name: station.name, label: '観測なし', color: null };
+  m.on('click', () => onSelect(m._mhvRef));
+  markersMap.set(station.code, m);
+  return m;
+}
+
+/**
+ * 1フレーム分の値を全マーカーへ反映する（データなしは非表示）
+ */
+function applyFrame(markersMap, stationsMeta, frame, monitor) {
+  for (let i = 0; i < stationsMeta.length; i++) {
+    const m = markersMap.get(stationsMeta[i].code);
+    if (!m) continue;
+    const v = normalizeValue(monitor, frame.vals[i]);
+    m._mhvRef.label = v.label;
+    m._mhvRef.color = v.color;
+    if (v.hasData) {
+      // 動的カラーマップ値のため setStyle で直接 RGB を渡す（設計上の例外）
+      m.setStyle({ radius: v.radius, fillColor: v.color, color: '#000',
+                   weight: 0.5, fillOpacity: 0.95, opacity: 1.0 });
+    } else {
+      m.setStyle({ opacity: 0.0, fillOpacity: 0.0 });
+    }
+  }
+}
+
+/**
+ * 観測値が大きい上位 N 点のみ前面へ並べ替える（前面の重なりを正しく見せる）
+ * 全点を毎フレーム並べ替えると重いため、上位のみに限定して再生を滑らかに保つ。
+ */
+function bringActiveToFront(markersMap, stationsMeta, frame, monitor, topN = 40) {
+  const order = [];
+  for (let i = 0; i < stationsMeta.length; i++) {
+    const v = normalizeValue(monitor, frame.vals[i]);
+    if (v.hasData) order.push({ code: stationsMeta[i].code, n: v.numeric });
+  }
+  order.sort((a, b) => a.n - b.n);          // 昇順 → 末尾(最大)が最後に前面化される
+  for (const o of order.slice(-topN)) markersMap.get(o.code)?.bringToFront();
+}
+
+/**
+ * 観測点詳細パネルを更新する
+ */
+function updateDetailPanel(containerEl, ref) {
+  if (!ref) {
+    containerEl.innerHTML = `<p class="rtm-placeholder">地図上の点を選択</p>`;
+    return;
+  }
+  const color = ref.color || 'var(--text-mid)';
+  containerEl.innerHTML =
+    `<div class="rtm-detail-row">` +
+      `<span class="rtm-detail-name">${ref.name || '-'}(${ref.code})</span>` +
+      `<span class="rtm-detail-si" style="color:${color}">${ref.label}</span>` +
+    `</div>`;
+}
+
+/**
+ * 上位5位の観測点リストを描画する
+ */
+function renderTop5(containerEl, top5) {
+  if (!containerEl) return;
+  if (!top5.length) {
+    containerEl.innerHTML = `<p class="rtm-placeholder">観測なし</p>`;
+    return;
+  }
+  // 動的カラーマップ値のため style 属性を直接使用（設計上の例外）
+  containerEl.innerHTML = top5.map(st => {
+    const color = st.color || 'var(--text-dim)';
+    return `<div class="rtm-top5-item">` +
+      `<span class="rtm-top5-swatch" style="background:${color}"></span>` +
+      `<span class="rtm-top5-name">${st.name || st.code}</span>` +
+      `<span class="rtm-top5-val" style="color:${color}">${st.label}</span>` +
+    `</div>`;
+  }).join('');
+}
+
+/**
+ * トランスポート（スライダー・時刻・カウンタ）を現在フレームへ同期する
+ */
+function updateTransport(els, frames, index) {
+  const frame = frames[index];
+  const timeStr = frame ? frame.time.split(' ')[1] || frame.time : '--:--:--';
+  els.slider.value      = index;
+  els.frameTime.textContent = timeStr;
+  els.clock.textContent     = timeStr;
+  els.counter.textContent   = `${frames.length ? index + 1 : 0} / ${frames.length}`;
+}
+
+/**
+ * フェッチインジケーターと通信エラーテキストを更新する
+ */
+function updateFetchStatus(indicatorEl, errorEl, { status, message = '' }) {
+  indicatorEl.className = 'rtm-indicator' + (status !== 'ok' ? ` ${status}` : '');
+  errorEl.textContent   = message;
+}
+
+/**
+ * 取得進捗バー＋ステータス文言を更新する
+ */
+function renderProgress(els, status) {
+  const pct = calcProgressPct(status);
+  els.progressWrap.hidden = false;
+  els.progressFill.style.width = pct + '%';
+  const ok   = status.saved ?? 0;
+  const miss = status.failed ?? 0;
+  els.statusText.textContent =
+    `取得中… ${status.done}/${status.total} 件 (${pct}%) ／ 成功${ok} 失敗${miss}`;
+}
+
+
+// ============================================================
+// ③ 統合用エントリ関数
+// ============================================================
+
+/**
+ * このHTML固有のDOM要素を収集する
+ */
+function collectMhvEls(root = document) {
+  const $ = id => root.getElementById(id);
+  return {
+    mapEl:        $('mhv-map'),
+    legendTitle:  $('mhv-legend-title'),
+    legendItems:  $('mhv-legend-items'),
+    monitor:      $('mhv-monitor'),
+    start:        $('mhv-start'),
+    end:          $('mhv-end'),
+    downloadBtn:  $('mhv-download-btn'),
+    progressWrap: document.querySelector('.mhv-progress'),
+    progressFill: $('mhv-progress-fill'),
+    statusText:   $('mhv-status-text'),
+    cacheSelect:  $('mhv-cache-select'),
+    loadBtn:      $('mhv-load-btn'),
+    detail:       $('mhv-detail-content'),
+    top5:         $('mhv-top5-list'),
+    indicator:    $('mhv-fetch-indicator'),
+    errorMsg:     $('mhv-error-msg'),
+    clock:        $('mhv-clock'),
+    // transport
+    prev:      $('mhv-prev'),
+    play:      $('mhv-play'),
+    next:      $('mhv-next'),
+    slider:    $('mhv-slider'),
+    frameTime: $('mhv-frame-time'),
+    counter:   $('mhv-counter'),
+    speed:     $('mhv-speed'),
+    loop:      $('mhv-loop'),
+  };
+}
+
+/**
+ * 履歴再生モジュールを初期化する。
+ * 取得（download → status ポーリング → frames）と再生（transport）を内包する。
+ */
+function initMonitorReplay(els, mapOptions = {}) {
+  const {
+    center   = MHV_DEFAULT_MAP_OPTIONS.center,
+    zoom     = MHV_DEFAULT_MAP_OPTIONS.zoom,
+    tileUrl  = MHV_DEFAULT_MAP_OPTIONS.tileUrl,
+    tileAttr = MHV_DEFAULT_MAP_OPTIONS.tileAttr,
+  } = mapOptions;
+
+  const mapInst        = L.map(els.mapEl, { center, zoom });
+  const canvasRenderer = L.canvas({ padding: 0.5 });
+  L.tileLayer(tileUrl, { attribution: tileAttr }).addTo(mapInst);
+
+  const markersMap = new Map();
+  buildLegend(els.legendTitle, els.legendItems, 'kyoshin');
+
+  const state = {
+    monitor:      'kyoshin',
+    stationsMeta: [],
+    frames:       [],
+    index:        0,
+    playing:      false,
+    selectedCode: null,
+    jobId:        null,
+    playTimer:    null,
+  };
+
+  // ── フレーム表示 ──
+  function showFrame(i) {
+    if (!state.frames.length) return;
+    state.index = Math.max(0, Math.min(state.frames.length - 1, i));
+    const frame = state.frames[state.index];
+    applyFrame(markersMap, state.stationsMeta, frame, state.monitor);
+    bringActiveToFront(markersMap, state.stationsMeta, frame, state.monitor);
+    updateTransport(els, state.frames, state.index);
+    renderTop5(els.top5, calcTop5(state.stationsMeta, frame, state.monitor));
+    if (state.selectedCode) {
+      const m = markersMap.get(state.selectedCode);
+      if (m) updateDetailPanel(els.detail, m._mhvRef);
+    }
+  }
+
+  // ── 再生制御 ──
+  function stopPlay() {
+    if (state.playTimer) { clearInterval(state.playTimer); state.playTimer = null; }
+    state.playing = false;
+    els.play.textContent = '▶';
+    els.play.classList.remove('mhv-play-btn--on');
+  }
+  function startPlay() {
+    if (!state.frames.length) return;
+    if (state.index >= state.frames.length - 1) state.index = 0;
+    state.playing = true;
+    els.play.textContent = '⏸';
+    els.play.classList.add('mhv-play-btn--on');
+    scheduleTick();
+  }
+  function scheduleTick() {
+    if (state.playTimer) clearInterval(state.playTimer);
+    const interval = speedToIntervalMs(Number(els.speed.value));
+    state.playTimer = setInterval(() => {
+      if (state.index >= state.frames.length - 1) {
+        if (els.loop.checked) { showFrame(0); }
+        else { stopPlay(); }
+        return;
+      }
+      showFrame(state.index + 1);
+    }, interval);
+  }
+  function togglePlay() { state.playing ? stopPlay() : startPlay(); }
+
+  // ── マーカー選択 ──
+  function onSelect(ref) {
+    state.selectedCode = ref.code;
+    updateDetailPanel(els.detail, ref);
+  }
+
+  // ── データ取得フロー ──
+  async function startDownload() {
+    const monitor = els.monitor.value;
+    const start   = normalizeDateTimeInput(els.start.value);
+    const end     = normalizeDateTimeInput(els.end.value);
+    if (!start || !end) {
+      updateFetchStatus(els.indicator, els.errorMsg, { status: 'error', message: '開始・終了日時を入力してください' });
+      return;
+    }
+    stopPlay();
+    els.downloadBtn.disabled = true;
+    updateFetchStatus(els.indicator, els.errorMsg, { status: 'stale', message: '' });
+    els.statusText.textContent = '取得を開始しています…';
+    els.progressWrap.hidden = false;
+    els.progressFill.style.width = '0%';
+
+    try {
+      const res  = await fetch('/api/monitor/download', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ monitor, start, end }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      state.jobId   = data.job_id;
+      state.monitor = data.monitor;
+      pollStatus();
+    } catch (e) {
+      els.downloadBtn.disabled = false;
+      els.statusText.textContent = '取得に失敗しました。';
+      updateFetchStatus(els.indicator, els.errorMsg, { status: 'error', message: e.message });
+    }
+  }
+
+  async function pollStatus() {
+    try {
+      const res = await fetch('/api/monitor/status?job_id=' + encodeURIComponent(state.jobId));
+      const s   = await res.json();
+      if (!res.ok) throw new Error(s.error || `HTTP ${res.status}`);
+      renderProgress(els, s);
+      if (s.state === 'running') {
+        setTimeout(pollStatus, 500);
+      } else if (s.state === 'done') {
+        loadFrames('job_id=' + encodeURIComponent(state.jobId),
+                   `取得完了: ${s.total} フレーム。再生できます。`);
+        refreshCacheList();
+      } else {
+        els.downloadBtn.disabled = false;
+        updateFetchStatus(els.indicator, els.errorMsg, { status: 'error', message: s.error || s.state });
+      }
+    } catch (e) {
+      els.downloadBtn.disabled = false;
+      updateFetchStatus(els.indicator, els.errorMsg, { status: 'error', message: e.message });
+    }
+  }
+
+  async function loadFrames(queryStr, doneMsg) {
+    try {
+      const res = await fetch('/api/monitor/frames?' + queryStr);
+      const d   = await res.json();
+      if (!res.ok || d.error) throw new Error(d.error || `HTTP ${res.status}`);
+      els.downloadBtn.disabled = false;
+      els.loadBtn.disabled     = !els.cacheSelect.value;
+
+      if (!d.frames.length) {
+        els.statusText.textContent = '取得できたフレームがありません（時間外・期限切れの可能性）。';
+        updateFetchStatus(els.indicator, els.errorMsg, { status: 'error', message: 'データ0件' });
+        return;
+      }
+
+      state.monitor      = d.monitor;
+      state.stationsMeta = d.stations;
+      state.frames       = d.frames;
+      state.index        = 0;
+      state.selectedCode = null;
+      updateDetailPanel(els.detail, null);
+      buildLegend(els.legendTitle, els.legendItems, state.monitor);
+
+      // 既存マーカーを一旦クリアしてから再生成（別データセット読み込みに対応）
+      for (const m of markersMap.values()) mapInst.removeLayer(m);
+      markersMap.clear();
+      for (const st of state.stationsMeta) {
+        if (st.lat == null || st.lon == null) continue;
+        getOrCreateMarker(mapInst, markersMap, st, onSelect, canvasRenderer);
+      }
+
+      els.slider.max      = state.frames.length - 1;
+      els.slider.value    = 0;
+      els.slider.disabled = false;
+      els.statusText.textContent = doneMsg || `読み込み完了: ${state.frames.length} フレーム。再生できます。`;
+      updateFetchStatus(els.indicator, els.errorMsg, { status: 'ok' });
+      showFrame(0);
+    } catch (e) {
+      els.downloadBtn.disabled = false;
+      updateFetchStatus(els.indicator, els.errorMsg, { status: 'error', message: e.message });
+    }
+  }
+
+  // ── 保存済みデータ（キャッシュ）一覧 ──
+  async function refreshCacheList() {
+    try {
+      const res = await fetch('/api/monitor/list');
+      const d   = await res.json();
+      if (!res.ok || d.error) return;
+      const prev = els.cacheSelect.value;
+      const MON_LABEL = { kyoshin: '強震', longperiod: '長周期' };
+      els.cacheSelect.innerHTML =
+        `<option value="">— ダウンロード済みデータ —</option>` +
+        d.items.map(it => {
+          const label = `${MON_LABEL[it.monitor] || it.monitor} ${it.start} 〜 ${it.end.split(' ')[1] || it.end} (${it.count}f)`;
+          return `<option value="${it.dir}" data-monitor="${it.monitor}">${label}</option>`;
+        }).join('');
+      els.cacheSelect.value = prev;
+      els.loadBtn.disabled  = !els.cacheSelect.value;
+    } catch (e) { /* 一覧取得失敗は致命的ではないので無視 */ }
+  }
+
+  function loadSelectedCache() {
+    const dir = els.cacheSelect.value;
+    if (!dir) return;
+    const opt     = els.cacheSelect.selectedOptions[0];
+    const monitor = opt ? opt.dataset.monitor : 'kyoshin';
+    stopPlay();
+    updateFetchStatus(els.indicator, els.errorMsg, { status: 'stale', message: '' });
+    els.statusText.textContent = 'キャッシュを読み込み中…';
+    loadFrames(`dir=${encodeURIComponent(dir)}&monitor=${encodeURIComponent(monitor)}`,
+               'キャッシュから読み込みました（再ダウンロードなし）。');
+  }
+
+  // ── イベント結線 ──
+  els.downloadBtn.addEventListener('click', startDownload);
+  els.play.addEventListener('click', togglePlay);
+  els.prev.addEventListener('click', () => { stopPlay(); showFrame(state.index - 1); });
+  els.next.addEventListener('click', () => { stopPlay(); showFrame(state.index + 1); });
+  els.slider.addEventListener('input', () => { stopPlay(); showFrame(Number(els.slider.value)); });
+  els.speed.addEventListener('change', () => { if (state.playing) scheduleTick(); });
+  els.cacheSelect.addEventListener('change', () => { els.loadBtn.disabled = !els.cacheSelect.value; });
+  els.loadBtn.addEventListener('click', loadSelectedCache);
+
+  // 起動時に保存済みデータ一覧を取得
+  refreshCacheList();
+
+  return { mapInst, showFrame, startDownload, refreshCacheList };
+}
+
+// ============================================================
+// スタンドアロン実行ブロック
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+  const els = collectMhvEls(document);
+
+  // 既定の日時: 現在JSTの 2分前〜1分前（1分間）を初期値に
+  const nowJst = new Date(Date.now() + 9 * 3600 * 1000);
+  const toLocal = (d) => d.toISOString().slice(0, 19);
+  const end   = new Date(nowJst.getTime() - 60 * 1000);
+  const start = new Date(nowJst.getTime() - 120 * 1000);
+  els.start.value = toLocal(start);
+  els.end.value   = toLocal(end);
+
+  initMonitorReplay(els);
+});
+
+/* ═══ 統合ガイド ═══════════════════════════════════════════════
+  読み込む場所  : personal.html の <script> に initMonitorReplay を組み込む
+  呼び出す場所  : collectMhvEls(root) で DOM を収集し initMonitorReplay(els) を呼ぶ
+  渡す引数      : els（collectMhvEls の戻り値）, mapOptions（任意の L.Map 設定）
+  追加するDOM   : #mhv-map / .mhv-form / .mhv-transport を配置する
+  サーバ要件    : /api/monitor/download (POST), /api/monitor/status,
+                  /api/monitor/frames (GET) が quakeview_proxy.py に必要
+════════════════════════════════════════════════════════════════ */
+</script>
+</body>
+</html>

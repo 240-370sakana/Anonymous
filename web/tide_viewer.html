@@ -1,0 +1,1364 @@
+<!-- Created: 2026-05-22 JST | Updated: 2026-06-01 JST -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>潮位観測ビューア — QuakeView</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/quakeview.css">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+</head>
+<body class="tide-body">
+
+<!-- ── ヘッダー ──────────────────────────────────────────────── -->
+<header class="tide-header">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <a href="../index.html" class="nav-logo">
+      <span class="nav-logo-icon">🌊</span>
+      <span class="nav-logo-text">QuakeView</span>
+    </a>
+    <span class="header-divider"></span>
+    <div>
+      <div class="logo-tag">TIDE MONITOR</div>
+      <h1>潮位観測ビューア <small>Sea Level</small></h1>
+    </div>
+  </div>
+  <div class="header-right">
+    <div id="tide-clock" class="live" style="font-size:11px;color:var(--amber);"></div>
+    <div class="live" style="margin-top:4px;"><span class="dot"></span><span>LIVE</span></div>
+  </div>
+</header>
+
+<!-- ── メインエリア ──────────────────────────────────────────── -->
+<div class="tide-main">
+
+  <!-- ── サイドバー ── -->
+  <aside class="tide-sidebar">
+
+    <!-- 地図パネル -->
+    <div id="tide-map" class="tide-map"></div>
+
+    <div class="tide-search-wrap">
+      <input type="text" class="tide-search" id="tide-search"
+             placeholder="地点名・管轄で検索…" autocomplete="off">
+    </div>
+    <div class="tide-station-list" id="tide-station-list">
+      <div class="tide-loading-msg">観測点リストを読み込み中…</div>
+    </div>
+
+    <!-- Discord通知設定 -->
+    <div class="tide-discord-panel">
+      <div class="tide-discord-toggle-row">
+        <label class="tide-discord-label">
+          <input type="checkbox" id="discord-enabled">
+          Discord通知（10分±15cm超）
+        </label>
+      </div>
+      <input type="url" class="tide-discord-input" id="discord-webhook-url"
+             placeholder="Webhook URL を入力…" style="display:none;">
+      <div class="tide-discord-status" id="discord-status"></div>
+    </div>
+
+  </aside>
+
+  <!-- ── コンテンツエリア ── -->
+  <main class="tide-content">
+
+    <!-- 未選択時 -->
+    <div class="tide-empty" id="tide-empty">
+      <span class="tide-empty-icon">🌊</span>
+      <span>観測点を選択してください</span>
+    </div>
+
+    <!-- ── 統合 地点詳細パネル ── -->
+    <div id="tide-detail" style="display:none;flex-direction:column;gap:16px;">
+
+      <!-- 情報バー -->
+      <div class="tide-info-bar">
+        <div class="tide-info-item">
+          <span class="tide-info-label">観測点</span>
+          <span class="tide-info-value" id="info-name">—</span>
+        </div>
+        <div class="tide-info-item">
+          <span class="tide-info-label">地域</span>
+          <span class="tide-info-value small" id="info-region">—</span>
+        </div>
+        <div class="tide-info-item">
+          <span class="tide-info-label">管轄</span>
+          <span class="tide-info-value small" id="info-type">—</span>
+        </div>
+        <a href="#" class="tide-source-link" id="info-jcg-link"
+           target="_blank" rel="noopener" style="display:none;">海保サイト ↗</a>
+        <a href="https://www.jma.go.jp/bosai/tidelevel/"
+           class="tide-source-link" target="_blank" rel="noopener">気象庁 ↗</a>
+      </div>
+
+      <!-- ── 海上保安庁セクション ── -->
+      <div id="tide-section-jcg" style="display:none;flex-direction:column;gap:10px;">
+        <div class="tide-section-header">
+          <span class="tide-section-label" style="color:var(--teal);">海上保安庁</span>
+          <div class="tide-status-bar">
+            <span class="tide-live" style="color:var(--teal);">
+              <span class="dot" style="background:var(--teal);"></span>LIVE
+            </span>
+            <span class="tide-updated"  id="jcg-updated"></span>
+            <span class="tide-countdown" id="jcg-countdown"></span>
+            <button class="btn" id="jcg-refresh-btn" style="font-size:9px;padding:3px 10px;">↺ 更新</button>
+          </div>
+        </div>
+        <div class="tide-graph-section">
+          <span class="tide-graph-label">潮位観測（5分値） cm</span>
+          <canvas class="tide-canvas" id="jcg-canvas-tide"></canvas>
+          <div class="tide-img-error" id="jcg-err-tide">
+            データを取得できませんでした（QuakeViewサーバー起動確認 or 対応外地点）
+          </div>
+        </div>
+        <div class="tide-attribution" id="jcg-attribution"></div>
+      </div>
+
+      <!-- ── 気象庁セクション ── -->
+      <div id="tide-section-jma" style="display:none;flex-direction:column;gap:10px;">
+        <div class="tide-section-header">
+          <span class="tide-section-label" style="color:var(--amber);">気象庁</span>
+          <div class="tide-status-bar">
+            <span class="tide-live" style="color:var(--amber);">
+              <span class="dot" style="background:var(--amber);"></span>LIVE
+            </span>
+            <span class="tide-updated"  id="jma-updated"></span>
+            <span class="tide-countdown" id="jma-countdown"></span>
+            <button class="btn" id="jma-refresh-btn" style="font-size:9px;padding:3px 10px;">↺ 更新</button>
+          </div>
+        </div>
+        <div class="tide-graph-section">
+          <span class="tide-graph-label">潮位観測（15秒値） cm</span>
+          <canvas class="tide-canvas" id="jma-canvas-tide"></canvas>
+          <div class="tide-img-error" id="jma-err-tide">
+            データを取得できませんでした（QuakeViewサーバー起動確認 or 未収録地点）
+          </div>
+        </div>
+        <div class="tide-graph-section">
+          <span class="tide-graph-label">偏差（観測値 − 天文潮位） cm</span>
+          <canvas class="tide-canvas tide-canvas--dep" id="jma-canvas-dep"></canvas>
+          <div class="tide-img-error" id="jma-err-dep">偏差データなし</div>
+        </div>
+      </div>
+
+    </div><!-- /#tide-detail -->
+
+  </main>
+</div><!-- /.tide-main -->
+
+<!-- ホバートレーサー（全グラフ共用） -->
+<div id="tide-hover-tip" class="tide-hover-tip"></div>
+
+<script>
+// Created: 2026-05-22 JST | Updated: 2026-06-01 JST
+
+/* ═══════════════════════════════════════════════════
+   ① 純粋ロジック（共通）
+═══════════════════════════════════════════════════ */
+
+/** JCG 観測ページ URL */
+function buildJcgPageUrl(id) {
+  return `https://www1.kaiho.mlit.go.jp/TIDE/gauge/gauge.php?s=${id}`;
+}
+
+/** JST 現在時刻 hh:mm:ss */
+function formatJstTime(nowMs) {
+  return new Date(nowMs).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false });
+}
+
+/** 更新日時ラベル */
+function formatUpdatedLabel(updatedMs) {
+  const t = new Date(updatedMs).toLocaleTimeString('ja-JP', {
+    timeZone: 'Asia/Tokyo', hour12: false, hour: '2-digit', minute: '2-digit'
+  });
+  return `最終更新 ${t}`;
+}
+
+/** カウントダウン文字列 */
+function formatCountdown(remainMs) {
+  const sec = Math.max(0, Math.ceil(remainMs / 1000));
+  return `次回更新まで ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
+
+/** 検索フィルタ */
+function filterStations(stations, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return stations;
+  return stations.filter(s =>
+    s.name.includes(q) ||
+    (s.region  && s.region.includes(q)) ||
+    (s.typeName && s.typeName.includes(q))
+  );
+}
+
+/** 地域グループに分割して返す */
+function groupByRegion(stations) {
+  const map = new Map();
+  for (const s of stations) {
+    const key = s.region || '不明';
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(s);
+  }
+  return [...map.entries()].map(([region, items]) => ({ region, items }));
+}
+
+/** 地点名を正規化（括弧・空白除去） */
+function normName(s) {
+  return s.replace(/[（()）\s]/g, '');
+}
+
+/**
+ * JMA 観測点コードの先頭2桁 → 広域地理区分
+ * （コード体系: 10=北海道, 11=東北, 12=関東, 13=東海,
+ *   14=北陸, 15=近畿, 16=中国, 17=四国, 18=九州,
+ *   19=南西諸島, 20=沖縄）
+ */
+function jmaCodeToRegion(code) {
+  const map = {
+    '10':'北海道', '11':'東北',   '12':'関東',
+    '13':'東海',   '14':'北陸',   '15':'近畿',
+    '16':'中国',   '17':'四国',   '18':'九州',
+    '19':'南西諸島','20':'沖縄',
+  };
+  return map[String(code).slice(0, 2)] || '—';
+}
+
+/* ═══════════════════════════════════════════════════
+   ① 純粋ロジック（地図）
+═══════════════════════════════════════════════════ */
+
+/** 観測点タイプ → マーカー色 */
+function markerColor(type) {
+  return { jcg:'#00c49a', jma:'#ffb000', phb:'#00e5ff' }[type] || '#888888';
+}
+
+const CARTO_DARK_STYLE = {
+  version: 8,
+  sources: { carto: { type: 'raster',
+    tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
+    tileSize: 256, attribution: '©OpenStreetMap ©CARTO' }},
+  layers: [{ id: 'carto', type: 'raster', source: 'carto' }]
+};
+
+/**
+ * MapLibre GL JS 地図を初期化して観測点マーカーを配置する
+ * @param {HTMLElement} mapEl
+ * @param {Array}       stations  merged station list（lat/lon 付き）
+ * @param {Function}    onSelect  (station) => void
+ * @returns {{ map: maplibregl.Map, markers: {}, _prevSelectedId: null }}
+ */
+function initTideMap(mapEl, stations, onSelect) {
+  if (!window.maplibregl) return null;
+
+  const map = new maplibregl.Map({
+    container: mapEl,
+    style: CARTO_DARK_STYLE,
+    center: [136, 36.5],
+    zoom: 5,
+  });
+
+  const stationsWithCoords = stations.filter(st => st.lat && st.lon);
+
+  map.on('load', () => {
+    map.addSource('stations', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+      promoteId: 'id',
+    });
+    map.addLayer({
+      id: 'stations',
+      type: 'circle',
+      source: 'stations',
+      paint: {
+        'circle-radius': ['case', ['boolean', ['feature-state', 'selected'], false], 9, 5],
+        'circle-color': ['get', 'color'],
+        'circle-opacity': 0.85,
+        'circle-stroke-color': ['case', ['boolean', ['feature-state', 'selected'], false], '#ffffff', 'transparent'],
+        'circle-stroke-width': ['case', ['boolean', ['feature-state', 'selected'], false], 2, 0],
+      }
+    });
+
+    map.getSource('stations').setData({
+      type: 'FeatureCollection',
+      features: stationsWithCoords.map(st => ({
+        type: 'Feature',
+        id: st.id,
+        geometry: { type: 'Point', coordinates: [st.lon, st.lat] },
+        properties: { id: st.id, name: st.name, color: markerColor(st.type) },
+      }))
+    });
+
+    map.on('click', 'stations', e => {
+      if (!e.features || !e.features.length) return;
+      const p  = e.features[0].properties;
+      const st = stationsWithCoords.find(s => s.id === p.id);
+      if (st) onSelect(st);
+    });
+    map.on('mouseenter', 'stations', e => {
+      map.getCanvas().style.cursor = 'pointer';
+      if (e.features && e.features.length) {
+        const p = e.features[0].properties;
+        map._tidePopup = new maplibregl.Popup({
+          closeButton: false,
+          className: 'tide-map-popup',
+          offset: 8,
+        })
+          .setLngLat(e.lngLat)
+          .setHTML(`<div class="tide-map-tooltip">${p.name}</div>`)
+          .addTo(map);
+      }
+    });
+    map.on('mouseleave', 'stations', () => {
+      map.getCanvas().style.cursor = '';
+      if (map._tidePopup) { map._tidePopup.remove(); map._tidePopup = null; }
+    });
+  });
+
+  return { map, markers: {}, _prevSelectedId: null, _stations: stationsWithCoords };
+}
+
+/**
+ * 選択中マーカーをハイライトして地図を移動する
+ * @param {{ map: maplibregl.Map, markers: {}, _prevSelectedId: string|null }|null} mapState
+ * @param {string|null} selectedId
+ */
+function updateMapSelection(mapState, selectedId) {
+  if (!mapState) return;
+  const map = mapState.map;
+
+  // 前回の選択を解除
+  if (mapState._prevSelectedId) {
+    try { map.setFeatureState({ source: 'stations', id: mapState._prevSelectedId }, { selected: false }); } catch (_) {}
+  }
+  // 新しい選択をセット
+  if (selectedId) {
+    try { map.setFeatureState({ source: 'stations', id: selectedId }, { selected: true }); } catch (_) {}
+  }
+  mapState._prevSelectedId = selectedId || null;
+
+  // 選択地点の座標を取得して移動
+  if (selectedId && mapState._stations) {
+    const st = mapState._stations.find(s => s.id === selectedId);
+    if (st) {
+      map.flyTo({ center: [st.lon, st.lat], zoom: Math.max(map.getZoom(), 6) });
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   ① 純粋ロジック（JCG）
+═══════════════════════════════════════════════════ */
+
+/**
+ * 元の JCG 観測点リスト（名前マッチ用・直接描画には使わない）
+ * region は JCG の広域区分（北海道・東北…）を使う
+ */
+function getJcgStations() {
+  return [
+    { id:'0001',name:'稚内',      region:'北海道'     },{ id:'0004',name:'網走',      region:'北海道'     },
+    { id:'0006',name:'花咲',      region:'北海道'     },{ id:'0008',name:'釧路',      region:'北海道'     },
+    { id:'0016',name:'函館',      region:'北海道'     },{ id:'0023',name:'小樽',      region:'北海道'     },
+    { id:'0029',name:'下北',      region:'東北'       },{ id:'0032',name:'深浦',      region:'東北'       },
+    { id:'0033',name:'竜飛',      region:'東北'       },{ id:'0035',name:'宮古',      region:'東北'       },
+    { id:'0036',name:'釜石',      region:'東北'       },{ id:'0037',name:'大船渡',    region:'東北'       },
+    { id:'0038',name:'鮎川',      region:'東北'       },{ id:'0042',name:'小名浜',    region:'東北'       },
+    { id:'0052',name:'布良',      region:'関東'       },{ id:'0053',name:'千葉',      region:'関東'       },
+    { id:'0054',name:'東京',      region:'関東'       },{ id:'0062',name:'横浜',      region:'関東'       },
+    { id:'0063',name:'横須賀',    region:'関東'       },{ id:'0065',name:'小田原',    region:'関東'       },
+    { id:'0055',name:'岡田',      region:'伊豆・小笠原'},{ id:'0056',name:'神津島',    region:'伊豆・小笠原'},
+    { id:'0057',name:'三宅島(阿古)',region:'伊豆・小笠原'},{ id:'0058',name:'三宅島坪田',region:'伊豆・小笠原'},
+    { id:'0059',name:'八丈島',  region:'伊豆・小笠原'},
+    { id:'0060',name:'父島',      region:'伊豆・小笠原'},{ id:'0068',name:'石廊崎',   region:'東海'       },
+    { id:'0070',name:'内浦',      region:'東海'       },{ id:'0071',name:'清水港',   region:'東海'       },
+    { id:'0073',name:'御前崎',    region:'東海'       },{ id:'0074',name:'舞阪',     region:'東海'       },
+    { id:'0075',name:'赤羽根',    region:'東海'       },{ id:'0079',name:'名古屋',   region:'東海'       },
+    { id:'0081',name:'鳥羽',      region:'東海'       },{ id:'0082',name:'尾鷲',     region:'東海'       },
+    { id:'0083',name:'熊野',      region:'東海'       },{ id:'0087',name:'佐渡',     region:'北陸'       },
+    { id:'0089',name:'粟島',      region:'北陸'       },{ id:'0091',name:'富山',     region:'北陸'       },
+    { id:'0095',name:'能登',      region:'北陸'       },{ id:'0101',name:'和歌山',   region:'近畿'       },
+    { id:'0103',name:'御坊',      region:'近畿'       },{ id:'0104',name:'白浜',     region:'近畿'       },
+    { id:'0105',name:'串本',      region:'近畿'       },{ id:'0106',name:'浦神',     region:'近畿'       },
+    { id:'0107',name:'大阪',      region:'近畿'       },{ id:'0108',name:'淡輪',     region:'近畿'       },
+    { id:'0109',name:'神戸',      region:'近畿'       },{ id:'0111',name:'洲本',     region:'近畿'       },
+    { id:'0113',name:'舞鶴',      region:'近畿'       },{ id:'0115',name:'宇野',     region:'中国'       },
+    { id:'0117',name:'呉',        region:'中国'       },{ id:'0118',name:'広島',     region:'中国'       },
+    { id:'0120',name:'境',        region:'中国'       },{ id:'0121',name:'浜田',     region:'中国'       },
+    { id:'0122',name:'西郷',      region:'中国'       },{ id:'0136',name:'徳山',     region:'中国'       },
+    { id:'0123',name:'高松',      region:'四国'       },{ id:'0127',name:'小松島',   region:'四国'       },
+    { id:'0128',name:'阿波由岐',  region:'四国'       },{ id:'0129',name:'室戸岬',   region:'四国'       },
+    { id:'0130',name:'高知',      region:'四国'       },{ id:'0132',name:'土佐清水', region:'四国'       },
+    { id:'0133',name:'松山',      region:'四国'       },{ id:'0134',name:'宇和島',   region:'四国'       },
+    { id:'0149',name:'博多',      region:'九州'       },{ id:'0152',name:'大浦',     region:'九州'       },
+    { id:'0154',name:'佐世保',    region:'九州'       },{ id:'0156',name:'長崎',     region:'九州'       },
+    { id:'0157',name:'口之津',    region:'九州'       },{ id:'0158',name:'厳原',     region:'九州'       },
+    { id:'0159',name:'対馬比田勝',region:'九州'       },{ id:'0161',name:'福江',     region:'九州'       },
+    { id:'0163',name:'大分',      region:'九州'       },{ id:'0164',name:'佐伯',     region:'九州'       },
+    { id:'0168',name:'苓北',      region:'九州'       },{ id:'0171',name:'油津',     region:'九州'       },
+    { id:'0173',name:'大泊',      region:'九州'       },{ id:'0174',name:'鹿児島',   region:'九州'       },
+    { id:'0175',name:'枕崎',      region:'九州'       },{ id:'0177',name:'西之表',   region:'南西諸島'   },
+    { id:'0178',name:'種子島',    region:'南西諸島'   },{ id:'0179',name:'中之島',   region:'南西諸島'   },
+    { id:'0180',name:'名瀬',      region:'南西諸島'   },{ id:'0181',name:'奄美',     region:'南西諸島'   },
+    { id:'0184',name:'那覇',      region:'南西諸島'   },{ id:'0185',name:'南大東',   region:'南西諸島'   },
+    { id:'0187',name:'石垣',      region:'南西諸島'   },{ id:'0188',name:'与那国',   region:'南西諸島'   },
+  ];
+}
+
+/** /api/tide/jcg から5分値データを取得 */
+async function jcgFetch(stationId) {
+  const r = await fetch(`/api/tide/jcg?station=${stationId}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+/** JCG レスポンス → Canvas用スライス */
+function jcgParseSlice(jcgData) {
+  const nowJst = new Date(Date.now() + 9 * 3600 * 1000);
+  nowJst.setUTCHours(0, 0, 0, 0);
+  const startMs    = nowJst.getTime() - 9 * 3600 * 1000;
+  const intervalMs = jcgData.interval * 60 * 1000;  // 5分 → ms
+  return { values: jcgData.data.map(p => p.value), intervalMs, startMs };
+}
+
+/* ═══════════════════════════════════════════════════
+   ① 純粋ロジック（JMA）
+═══════════════════════════════════════════════════ */
+
+const JMA_TIDE_BASE = 'https://www.jma.go.jp/bosai/tidelevel/';
+
+/** nowMs → JST の YYYYMMDD */
+function jmaFormatDate(nowMs) {
+  const jst = new Date(nowMs + 9 * 3600 * 1000);
+  return `${jst.getUTCFullYear()}${String(jst.getUTCMonth()+1).padStart(2,'0')}${String(jst.getUTCDate()).padStart(2,'0')}`;
+}
+
+/** プロキシ経由で JMA データを JSON 取得 */
+async function jmaProxyFetch(path) {
+  const r = await fetch('/proxy?url=' + encodeURIComponent(JMA_TIDE_BASE + path));
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${path}`);
+  return r.json();
+}
+
+/**
+ * tide_area.json から観測点リストを生成
+ * datumOffset: |height3| = TP → 基本水準面への変換量 [cm]
+ */
+function jmaExtractStations(areaJson) {
+  const list = [];
+  for (const [, region] of Object.entries(areaJson)) {
+    for (const c30 of (region.class30s || [])) {
+      for (const st of (c30.stations || [])) {
+        const h3 = parseFloat(st.detail?.height3 ?? 0);
+        list.push({
+          code:        st.code,
+          name:        st.name,
+          type:        st.type     || 'jma',
+          typeName:    st.typeName || '気象庁',
+          lat: st.lat, lon: st.lon,
+          datumOffset: isFinite(h3) ? Math.abs(h3) : 0,
+        });
+      }
+    }
+  }
+  return list;
+}
+
+/**
+ * JCG リスト + JMA リストを名前でマッチしてマージ
+ * - JCG 名前が一致した観測点: jcgId + jmaCode 両方セット
+ * - JMA のみ: jcgId=null
+ * 広域区分は JCG 名称を優先（なければ JMA の regionName）
+ */
+function buildMergedStations(jcgStations, jmaStations) {
+  const jmaByNorm = new Map();
+  for (const j of jmaStations) jmaByNorm.set(normName(j.name), j);
+
+  const merged       = [];
+  const usedJmaCodes = new Set();
+
+  // JCG 起点でマッチ
+  for (const jcg of jcgStations) {
+    const jma = jmaByNorm.get(normName(jcg.name));
+    merged.push({
+      id:          jcg.id,          // サイドバーの選択キー
+      jcgId:       jcg.id,
+      jmaCode:     jma?.code    ?? null,
+      name:        jcg.name,
+      region:      jcg.region,
+      typeName:    jma ? jma.typeName : '海上保安庁',
+      type:        jma?.type    ?? 'jcg',
+      lat:         jma?.lat     ?? null,
+      lon:         jma?.lon     ?? null,
+      datumOffset: jma?.datumOffset ?? 0,
+    });
+    if (jma) usedJmaCodes.add(jma.code);
+  }
+
+  // JMA のみ（JCG リストに存在しない）
+  for (const jma of jmaStations) {
+    if (usedJmaCodes.has(jma.code)) continue;
+    merged.push({
+      id:          jma.code,
+      jcgId:       null,
+      jmaCode:     jma.code,
+      name:        jma.name,
+      region:      jmaCodeToRegion(jma.code),
+      typeName:    jma.typeName,
+      type:        jma.type,
+      lat:         jma.lat,
+      lon:         jma.lon,
+      datumOffset: jma.datumOffset,
+    });
+  }
+
+  return merged;
+}
+
+/**
+ * tide_obs JSON → 当日スライス
+ * interval は秒単位（15秒 = 5760点/日）
+ */
+function jmaSliceToday(obsData) {
+  const intervalMs = obsData.interval * 1000;                       // 秒 → ms
+  const dayCount   = Math.round(24 * 60 * 60 / obsData.interval);  // 5760
+  const rawTide    = obsData.tide      || [];
+  const rawDep     = obsData.departure || [];
+  const tide = Array.from({ length: dayCount }, (_, i) => {
+    const v = rawTide[i];
+    return (v != null && isFinite(v)) ? v : null;
+  });
+  const departure = Array.from({ length: dayCount }, (_, i) => {
+    const v = rawDep[i];
+    return (v != null && isFinite(v)) ? v : null;
+  });
+  return {
+    tide, departure,
+    startMs:   new Date(obsData.time).getTime(),
+    intervalMs,
+    count:     dayCount,
+  };
+}
+
+/* ═══════════════════════════════════════════════════
+   ② 描画関数（共通）
+═══════════════════════════════════════════════════ */
+
+/** 地点リストを描画 */
+function renderStationList(listEl, groups, selectedId, onSelect) {
+  listEl.innerHTML = '';
+  for (const { region, items } of groups) {
+    const hdr = document.createElement('div');
+    hdr.className   = 'tide-region-header';
+    hdr.textContent = region;
+    listEl.appendChild(hdr);
+    for (const st of items) {
+      const row = document.createElement('div');
+      row.className  = 'tide-station-item' + (st.id === selectedId ? ' selected' : '');
+      row.dataset.id = st.id;
+
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = st.name;
+
+      const tagSpan = document.createElement('span');
+      tagSpan.className = 'tide-station-id';
+      // 管轄略称
+      const typeShort = {
+        jcg:'海保', jma:'気象', phb:'港湾', gsi:'国地院',
+        rib:'水保', ack:'愛知', cbk:'千葉', hgk:'兵庫', ykk:'四日市',
+      };
+      // 海保データも持つか
+      const srcLabel = st.jcgId ? '海保+' : '';
+      const typeKey  = (jmaStationsCache || []).find(j => j.code === st.jmaCode)?.type ?? '';
+      tagSpan.textContent = srcLabel + (typeShort[typeKey] || st.typeName.slice(0,3));
+
+      row.appendChild(nameSpan);
+      row.appendChild(tagSpan);
+      row.addEventListener('click', () => onSelect(st));
+      listEl.appendChild(row);
+    }
+  }
+}
+
+/** 時計を更新 */
+function renderClock(el, nowMs) {
+  el.textContent = formatJstTime(nowMs);
+}
+
+/** 情報バーを更新 */
+function renderInfoBar(els, st) {
+  els.name.textContent   = st.name;
+  els.region.textContent = st.region;
+  els.type.textContent   = st.typeName;
+  if (els.jcgLink) {
+    if (st.jcgId) {
+      els.jcgLink.href         = buildJcgPageUrl(st.jcgId);
+      els.jcgLink.style.display = '';
+    } else {
+      els.jcgLink.style.display = 'none';
+    }
+  }
+}
+
+/** ステータスバーを更新 */
+function renderStatusBar(els, updatedMs, remainMs) {
+  if (els.updated  && updatedMs) els.updated.textContent   = formatUpdatedLabel(updatedMs);
+  if (els.countdown)             els.countdown.textContent = formatCountdown(remainMs);
+}
+
+/** 詳細パネル表示切替 */
+function renderDetailVisibility(emptyEl, detailEl, show) {
+  emptyEl.style.display  = show ? 'none' : 'flex';
+  detailEl.style.display = show ? 'flex' : 'none';
+}
+
+/* ═══════════════════════════════════════════════════
+   ② 描画関数（Canvas グラフ）
+═══════════════════════════════════════════════════ */
+
+/**
+ * Canvas に潮位グラフを描画（JCG・JMA 共用）
+ * @param {HTMLCanvasElement} canvas
+ * @param {(number|null)[]}   values      cm 配列
+ * @param {number}            nowMs
+ * @param {number}            startMs     当日 00:00 JST の UTC ms
+ * @param {number}            intervalMs  データ間隔 ms
+ * @param {string}            lineColor
+ */
+/**
+ * @param {number|null} hoverIdx  ホバー位置（小数インデックス）null なら非表示
+ */
+function drawTideGraph(canvas, values, nowMs, startMs, intervalMs, lineColor, hoverIdx = null) {
+  const dpr = window.devicePixelRatio || 1;
+  const W   = canvas.clientWidth;
+  const H   = canvas.clientHeight;
+  if (!W || !H) return;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const pad = { top: 14, bottom: 26, left: 50, right: 14 };
+  const pw  = W - pad.left - pad.right;
+  const ph  = H - pad.top  - pad.bottom;
+  const n   = values.length;
+
+  const cs    = getComputedStyle(document.documentElement);
+  const cv    = k => cs.getPropertyValue(k).trim() || undefined;
+  const cSurf = cv('--surface')  || '#12121e';
+  const cBord = cv('--border')   || '#2a2a3a';
+  const cBord2= cv('--border2')  || '#333';
+  const cDim  = cv('--text-dim') || '#666';
+  const cRed  = cv('--red')      || '#ff4444';
+  const cMono = cv('--mono')     || 'monospace';
+
+  const valid = values.filter(v => v != null && isFinite(v));
+  if (!valid.length) { ctx.clearRect(0,0,W,H); return; }
+  const rawMin = Math.min(...valid), rawMax = Math.max(...valid);
+  const span   = Math.max(rawMax - rawMin, 8);
+  const mg     = span * 0.14;
+  const yMin   = rawMin - mg, yMax = rawMax + mg;
+
+  const xOf = i => pad.left + (i / Math.max(n-1,1)) * pw;
+  const yOf = v => pad.top  + ph * (1 - (v - yMin) / (yMax - yMin));
+
+  // 背景
+  ctx.fillStyle = cSurf;
+  ctx.fillRect(0, 0, W, H);
+
+  // ゼロライン
+  const zy = yOf(0);
+  if (zy >= pad.top && zy <= pad.top + ph) {
+    ctx.save();
+    ctx.strokeStyle = cBord2; ctx.setLineDash([4,6]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad.left, zy); ctx.lineTo(pad.left+pw, zy); ctx.stroke();
+    ctx.restore();
+  }
+
+  // X グリッド（6h ごと）
+  ctx.font = `9px ${cMono}`; ctx.textAlign = 'center';
+  for (let h = 0; h <= 24; h += 6) {
+    const idx = h * 3600 / (intervalMs / 1000);
+    const x   = xOf(idx);
+    ctx.strokeStyle = cBord; ctx.setLineDash([]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top+ph); ctx.stroke();
+    ctx.fillStyle = cDim;
+    ctx.fillText(`${String(h).padStart(2,'0')}:00`, x, H - 6);
+  }
+
+  // Y グリッド＆ラベル
+  const ySpan = yMax - yMin;
+  const step  = ySpan > 80 ? 20 : ySpan > 40 ? 10 : ySpan > 20 ? 5 : 2;
+  const yBase = Math.ceil(yMin / step) * step;
+  ctx.textAlign = 'right';
+  for (let v = yBase; v <= yMax + step * 0.5; v += step) {
+    const y = yOf(v);
+    if (y < pad.top-1 || y > pad.top+ph+1) continue;
+    ctx.fillStyle = cDim; ctx.font = `9px ${cMono}`;
+    ctx.fillText(`${v}`, pad.left - 4, y + 3);
+    ctx.save();
+    ctx.strokeStyle = cBord; ctx.lineWidth = 0.5; ctx.setLineDash([2,5]);
+    ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(pad.left+pw,y); ctx.stroke();
+    ctx.restore();
+  }
+
+  // 曲線
+  ctx.save();
+  ctx.strokeStyle = lineColor; ctx.lineWidth = 2;
+  ctx.lineJoin = 'round'; ctx.setLineDash([]);
+  let pen = false;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const v = values[i];
+    if (v == null || !isFinite(v)) { pen = false; continue; }
+    const x = xOf(i), y = yOf(v);
+    if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
+  }
+  ctx.stroke(); ctx.restore();
+
+  // 現在時刻マーカー
+  const elapsed = nowMs - startMs;
+  const curIdx  = elapsed / intervalMs;
+  if (curIdx >= 0 && curIdx <= n) {
+    const x  = xOf(curIdx);
+    const ci = Math.min(Math.floor(curIdx), n-1);
+    const cv2 = values[ci];
+    ctx.save();
+    ctx.strokeStyle = cRed; ctx.lineWidth = 1.5; ctx.setLineDash([3,4]);
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top+ph); ctx.stroke();
+    if (cv2 != null && isFinite(cv2)) {
+      const cy = yOf(cv2);
+      ctx.fillStyle = cRed;
+      ctx.beginPath(); ctx.arc(x, cy, 4, 0, Math.PI*2); ctx.fill();
+      const label = `${cv2}cm`;
+      ctx.font = `bold 10px ${cMono}`;
+      const tw  = ctx.measureText(label).width;
+      const bx  = Math.min(x+8, pad.left+pw-tw-6);
+      const by  = Math.max(cy-16, pad.top+12);
+      ctx.fillStyle = cSurf;
+      ctx.fillRect(bx-3, by-10, tw+10, 14);
+      ctx.fillStyle = cRed; ctx.textAlign = 'left';
+      ctx.fillText(label, bx+2, by);
+    }
+    ctx.restore();
+  }
+
+  // ── ホバー十字線 ──────────────────────────────────
+  if (hoverIdx !== null && isFinite(hoverIdx)) {
+    const hi  = Math.max(0, Math.min(n - 1, Math.round(hoverIdx)));
+    const hv  = values[hi];
+    const hx  = xOf(hoverIdx);   // マウスX位置（小数）
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([3, 3]);
+
+    // 縦線
+    ctx.beginPath();
+    ctx.moveTo(hx, pad.top);
+    ctx.lineTo(hx, pad.top + ph);
+    ctx.stroke();
+
+    if (hv != null && isFinite(hv)) {
+      const hy = yOf(hv);
+
+      // 横線
+      ctx.beginPath();
+      ctx.moveTo(pad.left, hy);
+      ctx.lineTo(pad.left + pw, hy);
+      ctx.stroke();
+
+      ctx.restore();
+
+      // 交点ドット
+      ctx.save();
+      ctx.fillStyle   = '#ffffff';
+      ctx.strokeStyle = lineColor;
+      ctx.lineWidth   = 2;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.restore();
+    }
+  }
+}
+
+/** JCG グラフ描画（セクション表示 + canvas） */
+function jcgRenderGraph(els, slice, nowMs) {
+  const cs   = getComputedStyle(document.documentElement);
+  const cTeal = cs.getPropertyValue('--teal').trim() || '#00c49a';
+  const obs   = slice.values.filter(v => v != null && isFinite(v));
+  if (obs.length) {
+    els.sectionJcg.style.display = 'flex';
+    els.canvasTide.style.display = 'block';
+    els.errTide.style.display    = 'none';
+    drawTideGraph(els.canvasTide, slice.values, nowMs, slice.startMs, slice.intervalMs, cTeal,
+                  _hoverState.get(els.canvasTide) ?? null);
+  } else {
+    els.sectionJcg.style.display = 'flex';
+    els.canvasTide.style.display = 'none';
+    els.errTide.style.display    = 'block';
+  }
+}
+
+/** JMA 両グラフ描画（セクション表示 + canvas） */
+function jmaRenderGraphs(els, sliced, nowMs) {
+  const cs    = getComputedStyle(document.documentElement);
+  const cCyan = cs.getPropertyValue('--cyan').trim()  || '#00e5ff';
+  const cAmb  = cs.getPropertyValue('--amber').trim() || '#ffb000';
+  const obs   = sliced.tide.filter(v => v != null && isFinite(v));
+
+  els.sectionJma.style.display = 'flex';
+
+  if (obs.length) {
+    els.canvasTide.style.display = 'block';
+    els.errTide.style.display    = 'none';
+    drawTideGraph(els.canvasTide, sliced.tide, nowMs, sliced.startMs, sliced.intervalMs, cCyan,
+                  _hoverState.get(els.canvasTide) ?? null);
+  } else {
+    els.canvasTide.style.display = 'none';
+    els.errTide.style.display    = 'block';
+  }
+
+  const depObs = sliced.departure.filter(v => v != null && isFinite(v));
+  if (depObs.length) {
+    els.canvasDep.style.display = 'block';
+    els.errDep.style.display    = 'none';
+    drawTideGraph(els.canvasDep, sliced.departure, nowMs, sliced.startMs, sliced.intervalMs, cAmb,
+                  _hoverState.get(els.canvasDep) ?? null);
+  } else {
+    els.canvasDep.style.display = 'none';
+    els.errDep.style.display    = 'block';
+  }
+}
+
+/** 出典表示 */
+function renderJcgAttribution(attrEl, jcgData) {
+  const base = 'https://www1.kaiho.mlit.go.jp/TIDE/gauge/';
+  const url  = jcgData.source_url || base;
+  const datum = jcgData.meta?.datum || '';
+  attrEl.innerHTML =
+    `出典：<a href="${base}" target="_blank" rel="noopener">海上保安庁ホームページ</a>` +
+    `（<a href="${url}" target="_blank" rel="noopener">${url}</a>）` +
+    ` ／ QuakeViewにて数値データを加工・グラフ描画` +
+    (datum ? `<br>基準面: ${datum}` : '');
+}
+
+/* ═══════════════════════════════════════════════════
+   ③ 統合エントリ関数
+═══════════════════════════════════════════════════ */
+
+// JMAステーション一覧キャッシュ（renderStationList から参照）
+let jmaStationsCache = null;
+
+// ── ホバートレーサー ────────────────────────────────────────
+
+/** canvas → 現在のホバー位置（小数インデックス）を保持 */
+const _hoverState = new Map();
+
+/**
+ * Canvas にホバーイベントを付け、ツールチップと十字線を表示する
+ * @param {HTMLCanvasElement} canvas
+ * @param {function(): {values:(number|null)[], startMs:number, intervalMs:number}|null} getSlice
+ */
+function attachGraphHover(canvas, getSlice) {
+  const tipEl = document.getElementById('tide-hover-tip');
+  if (!tipEl) return;
+
+  canvas.style.cursor = 'crosshair';
+
+  canvas.addEventListener('mousemove', e => {
+    const slice = getSlice();
+    if (!slice || !slice.values.length) {
+      _hoverState.delete(canvas);
+      tipEl.style.display = 'none';
+      return;
+    }
+
+    const rect   = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const pad    = { left: 50, right: 14 };
+    const pw     = rect.width - pad.left - pad.right;
+
+    // グラフ領域外
+    if (mouseX < pad.left || mouseX > rect.width - pad.right) {
+      _hoverState.delete(canvas);
+      tipEl.style.display = 'none';
+      return;
+    }
+
+    const n        = slice.values.length;
+    const fracIdx  = ((mouseX - pad.left) / pw) * (n - 1);
+    const idx      = Math.max(0, Math.min(n - 1, Math.round(fracIdx)));
+    const val      = slice.values[idx];
+
+    _hoverState.set(canvas, fracIdx);
+
+    // 時刻計算（JST）
+    const timeMs  = slice.startMs + idx * slice.intervalMs;
+    const d       = new Date(timeMs + 9 * 3600 * 1000);
+    const hh = String(d.getUTCHours()).padStart(2, '0');
+    const mm = String(d.getUTCMinutes()).padStart(2, '0');
+    const ss = String(d.getUTCSeconds()).padStart(2, '0');
+    // 60秒未満インターバル（=15秒値）なら秒も表示
+    const timeStr = slice.intervalMs < 60000
+      ? `${hh}:${mm}:${ss}`
+      : `${hh}:${mm}`;
+
+    if (val != null && isFinite(val)) {
+      tipEl.innerHTML =
+        `<span class="tip-time">${timeStr}</span><br>` +
+        `<span class="tip-value">${val > 0 ? '+' : ''}${val} cm</span>`;
+      tipEl.style.display = 'block';
+
+      // カーソル右上に表示（画面端で折り返す）
+      const tw  = tipEl.offsetWidth;
+      const th  = tipEl.offsetHeight;
+      const tx  = Math.min(e.clientX + 14, window.innerWidth  - tw - 6);
+      const ty  = Math.max(e.clientY - th - 10, 6);
+      tipEl.style.left = tx + 'px';
+      tipEl.style.top  = ty + 'px';
+    } else {
+      tipEl.style.display = 'none';
+    }
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    _hoverState.delete(canvas);
+    tipEl.style.display = 'none';
+  });
+}
+
+/** アプリ状態 */
+function createAppState() {
+  return {
+    stations:      [],    // merged station list
+    selectedId:    null,
+    query:         '',
+    refreshMs:     5 * 60 * 1000,
+    mapState:      null,  // { map: maplibregl.Map, markers: {} }
+    // JCG
+    jcgSlice:      null,
+    jcgUpdatedMs:  0,
+    // JMA
+    jmaSliced:     null,
+    jmaUpdatedMs:  0,
+    jmaFetching:   false,
+    jcgFetching:   false,
+    // Discord通知
+    alertState: {
+      lastAlertMs: {},       // stationName → 最終通知 ms
+      cooldownMs:  10 * 60 * 1000,
+    },
+  };
+}
+
+/** JMA 観測点リストを取得してマージ */
+async function loadAndMergeStations(state, els, onSelect) {
+  try {
+    const areaJson     = await jmaProxyFetch('const/tide_area.json');
+    const jmaStations  = jmaExtractStations(areaJson);
+    jmaStationsCache   = jmaStations;
+    state.stations     = buildMergedStations(getJcgStations(), jmaStations);
+  } catch (e) {
+    // フォールバック: JCG のみ
+    jmaStationsCache   = [];
+    state.stations     = getJcgStations().map(jcg => ({
+      id: jcg.id, jcgId: jcg.id, jmaCode: null,
+      name: jcg.name, region: jcg.region,
+      typeName: '海上保安庁', datumOffset: 0,
+    }));
+  }
+  renderStationList(
+    els.stationList,
+    groupByRegion(filterStations(state.stations, state.query)),
+    state.selectedId,
+    st => onStationSelected(st, state, els)
+  );
+  // 地図初期化（観測点ロード後）
+  const mapEl = document.getElementById('tide-map');
+  if (mapEl) {
+    state.mapState = initTideMap(
+      mapEl, state.stations,
+      st => onStationSelected(st, state, els)
+    );
+  }
+}
+
+/** JCG データ取得 → Canvas 描画 */
+async function jcgFetchAndDraw(jcgId, state, els) {
+  if (!jcgId || state.jcgFetching) return;
+  state.jcgFetching = true;
+  try {
+    const data     = await jcgFetch(jcgId);
+    state.jcgSlice  = jcgParseSlice(data);
+    state.jcgUpdatedMs = Date.now();
+    jcgRenderGraph(els.jcg, state.jcgSlice, Date.now());
+    renderJcgAttribution(els.jcgAttr, data);
+    renderStatusBar(
+      { updated: els.jcgUpdated, countdown: els.jcgCountdown },
+      state.jcgUpdatedMs,
+      state.refreshMs - (Date.now() - state.jcgUpdatedMs)
+    );
+    // 10分変動チェック（JMAデータがない場合のみ。JMAがあればそちらを優先）
+    if (!state.jmaSliced) {
+      const st = state.stations.find(s => s.id === state.selectedId);
+      if (st) checkTideAlert(st.name, state.jcgSlice.values, state.jcgSlice.intervalMs, state.alertState);
+    }
+  } catch (e) {
+    els.jcg.sectionJcg.style.display = 'flex';
+    els.jcg.canvasTide.style.display = 'none';
+    els.jcg.errTide.style.display    = 'block';
+    els.jcg.errTide.textContent      = `取得エラー: ${e.message}`;
+  } finally {
+    state.jcgFetching = false;
+  }
+}
+
+/** JMA データ取得 → Canvas 描画 */
+async function jmaFetchAndDraw(jmaCode, state, els) {
+  if (!jmaCode || state.jmaFetching) return;
+  state.jmaFetching = true;
+  const yyyymmdd = jmaFormatDate(Date.now());
+  try {
+    const obsData      = await jmaProxyFetch(`data/tide/tide_obs_${yyyymmdd}_${jmaCode}.json`);
+    state.jmaSliced    = jmaSliceToday(obsData);
+    state.jmaUpdatedMs = Date.now();
+    jmaRenderGraphs(els.jma, state.jmaSliced, Date.now());
+    renderStatusBar(
+      { updated: els.jmaUpdated, countdown: els.jmaCountdown },
+      state.jmaUpdatedMs,
+      state.refreshMs - (Date.now() - state.jmaUpdatedMs)
+    );
+    // 10分変動チェック（JMA 15秒値を優先使用）
+    const st = state.stations.find(s => s.id === state.selectedId);
+    if (st) checkTideAlert(st.name, state.jmaSliced.tide, state.jmaSliced.intervalMs, state.alertState);
+  } catch (e) {
+    els.jma.sectionJma.style.display = 'flex';
+    els.jma.canvasTide.style.display = 'none';
+    els.jma.errTide.style.display    = 'block';
+    els.jma.errTide.textContent      = `取得エラー: ${e.message}`;
+    els.jma.canvasDep.style.display  = 'none';
+    els.jma.errDep.style.display     = 'block';
+  } finally {
+    state.jmaFetching = false;
+  }
+}
+
+/** 観測点選択 → JCG + JMA を並列フェッチ */
+async function onStationSelected(st, state, els) {
+  state.selectedId   = st.id;
+  state.jcgSlice     = null;
+  state.jmaSliced    = null;
+  state.jcgUpdatedMs = 0;
+  state.jmaUpdatedMs = 0;
+
+  // 情報バー更新
+  renderInfoBar(els.info, st);
+
+  // セクション初期化（hide）
+  els.jcg.sectionJcg.style.display = 'none';
+  els.jma.sectionJma.style.display = 'none';
+
+  // 詳細パネル表示
+  renderDetailVisibility(els.empty, els.detail, true);
+
+  // 地図マーカーをハイライト
+  updateMapSelection(state.mapState, state.selectedId);
+
+  // リスト選択状態更新
+  renderStationList(
+    els.stationList,
+    groupByRegion(filterStations(state.stations, state.query)),
+    state.selectedId,
+    s => onStationSelected(s, state, els)
+  );
+
+  // データ並列取得
+  const tasks = [];
+  if (st.jcgId)   tasks.push(jcgFetchAndDraw(st.jcgId, state, els));
+  if (st.jmaCode) tasks.push(jmaFetchAndDraw(st.jmaCode, state, els));
+  if (!tasks.length) return;
+  await Promise.allSettled(tasks);
+}
+
+/**
+ * tick() — 毎秒
+ */
+function tick(state, els) {
+  const nowMs = Date.now();
+  renderClock(els.clock, nowMs);
+
+  if (!state.selectedId) return;
+  const st = state.stations.find(s => s.id === state.selectedId);
+  if (!st) return;
+
+  // JCG Canvas 毎秒再描画
+  if (state.jcgSlice) {
+    jcgRenderGraph(els.jcg, state.jcgSlice, nowMs);
+    const remain = state.refreshMs - (nowMs - state.jcgUpdatedMs);
+    renderStatusBar(
+      { updated: els.jcgUpdated, countdown: els.jcgCountdown },
+      state.jcgUpdatedMs, remain
+    );
+    if (remain <= 0 && st.jcgId) jcgFetchAndDraw(st.jcgId, state, els);
+  }
+
+  // JMA Canvas 毎秒再描画
+  if (state.jmaSliced) {
+    jmaRenderGraphs(els.jma, state.jmaSliced, nowMs);
+    const remain = state.refreshMs - (nowMs - state.jmaUpdatedMs);
+    renderStatusBar(
+      { updated: els.jmaUpdated, countdown: els.jmaCountdown },
+      state.jmaUpdatedMs, remain
+    );
+    if (remain <= 0 && st.jmaCode) jmaFetchAndDraw(st.jmaCode, state, els);
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   ① 純粋ロジック（Discord通知）
+═══════════════════════════════════════════════════ */
+
+/** localStorage から Discord 設定を読む */
+function loadDiscordConfig() {
+  try {
+    const s = localStorage.getItem('quakeview-discord');
+    return s ? JSON.parse(s) : { enabled: false, webhookUrl: '' };
+  } catch { return { enabled: false, webhookUrl: '' }; }
+}
+
+/** Discord 設定を localStorage に保存 */
+function saveDiscordConfig(cfg) {
+  localStorage.setItem('quakeview-discord', JSON.stringify(cfg));
+}
+
+/**
+ * 直近の10分間の潮位変動量を返す
+ * @param {(number|null)[]} values   観測値配列
+ * @param {number}          intervalMs データ間隔 ms
+ * @returns {{ change: number, currentVal: number, oldVal: number }|null}
+ */
+function calcTenMinChange(values, intervalMs) {
+  const steps = Math.round(10 * 60 * 1000 / intervalMs);
+  let latestIdx = -1;
+  for (let i = values.length - 1; i >= 0; i--) {
+    if (values[i] != null && isFinite(values[i])) { latestIdx = i; break; }
+  }
+  if (latestIdx < 0) return null;
+
+  // 10分前に最も近い有効値を探す（±1ステップ許容）
+  for (let offset = 0; offset <= 2; offset++) {
+    const oldIdx = latestIdx - steps - offset;
+    if (oldIdx < 0) break;
+    if (values[oldIdx] != null && isFinite(values[oldIdx])) {
+      return {
+        change:     values[latestIdx] - values[oldIdx],
+        currentVal: values[latestIdx],
+        oldVal:     values[oldIdx],
+      };
+    }
+  }
+  return null;
+}
+
+/** Discord Webhook に POST する（副作用） */
+async function sendDiscordWebhook(webhookUrl, content) {
+  const r = await fetch(webhookUrl, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ content }),
+  });
+  if (!r.ok) throw new Error(`Discord HTTP ${r.status}`);
+}
+
+/**
+ * 10分変動を確認し、閾値超過時に Discord へ通知する
+ * @param {string}            stationName
+ * @param {(number|null)[]}   values
+ * @param {number}            intervalMs
+ * @param {object}            alertState  state.alertState
+ */
+async function checkTideAlert(stationName, values, intervalMs, alertState) {
+  const cfg = loadDiscordConfig();
+  if (!cfg.enabled || !cfg.webhookUrl) return;
+
+  const result = calcTenMinChange(values, intervalMs);
+  if (!result) return;
+
+  const absDelta = Math.abs(result.change);
+  if (absDelta < 15) return;
+
+  // 同じ観測点のクールダウン（10分）
+  const lastMs = alertState.lastAlertMs[stationName] || 0;
+  if (Date.now() - lastMs < alertState.cooldownMs) return;
+
+  alertState.lastAlertMs[stationName] = Date.now();
+
+  const sign   = result.change > 0 ? '+' : '';
+  const nowJst = new Date(Date.now() + 9 * 3600 * 1000);
+  const hh     = String(nowJst.getUTCHours()).padStart(2, '0');
+  const mm     = String(nowJst.getUTCMinutes()).padStart(2, '0');
+  const msg    =
+    `【津波かも？】観測点: ${stationName}\n` +
+    `${hh}:${mm} ${sign}${Math.round(result.change)}cm`;
+
+  try {
+    await sendDiscordWebhook(cfg.webhookUrl, msg);
+    console.info(`[Discord] 通知送信: ${stationName} ${sign}${Math.round(result.change)}cm`);
+  } catch (e) {
+    console.warn('[Discord] 通知失敗:', e.message);
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   初期化
+═══════════════════════════════════════════════════ */
+function init() {
+  const state = createAppState();
+
+  // DOM 収集
+  const els = {
+    clock:       document.getElementById('tide-clock'),
+    search:      document.getElementById('tide-search'),
+    stationList: document.getElementById('tide-station-list'),
+    empty:       document.getElementById('tide-empty'),
+    detail:      document.getElementById('tide-detail'),
+    // 情報バー
+    info: {
+      name:    document.getElementById('info-name'),
+      region:  document.getElementById('info-region'),
+      type:    document.getElementById('info-type'),
+      jcgLink: document.getElementById('info-jcg-link'),
+    },
+    // JCG
+    jcg: {
+      sectionJcg: document.getElementById('tide-section-jcg'),
+      canvasTide: document.getElementById('jcg-canvas-tide'),
+      errTide:    document.getElementById('jcg-err-tide'),
+    },
+    jcgAttr:     document.getElementById('jcg-attribution'),
+    jcgUpdated:  document.getElementById('jcg-updated'),
+    jcgCountdown:document.getElementById('jcg-countdown'),
+    jcgRefreshBtn:document.getElementById('jcg-refresh-btn'),
+    // JMA
+    jma: {
+      sectionJma: document.getElementById('tide-section-jma'),
+      canvasTide: document.getElementById('jma-canvas-tide'),
+      canvasDep:  document.getElementById('jma-canvas-dep'),
+      errTide:    document.getElementById('jma-err-tide'),
+      errDep:     document.getElementById('jma-err-dep'),
+    },
+    jmaUpdated:  document.getElementById('jma-updated'),
+    jmaCountdown:document.getElementById('jma-countdown'),
+    jmaRefreshBtn:document.getElementById('jma-refresh-btn'),
+  };
+
+  // 検索
+  els.search.addEventListener('input', e => {
+    state.query = e.target.value;
+    renderStationList(
+      els.stationList,
+      groupByRegion(filterStations(state.stations, state.query)),
+      state.selectedId,
+      st => onStationSelected(st, state, els)
+    );
+  });
+
+  // 手動更新ボタン
+  els.jcgRefreshBtn.addEventListener('click', () => {
+    const st = state.stations.find(s => s.id === state.selectedId);
+    if (st?.jcgId) { state.jcgUpdatedMs = 0; jcgFetchAndDraw(st.jcgId, state, els); }
+  });
+  els.jmaRefreshBtn.addEventListener('click', () => {
+    const st = state.stations.find(s => s.id === state.selectedId);
+    if (st?.jmaCode) { state.jmaUpdatedMs = 0; jmaFetchAndDraw(st.jmaCode, state, els); }
+  });
+
+  // ── Discord通知設定 ──────────────────────────────
+  const discordEnabledEl = document.getElementById('discord-enabled');
+  const discordUrlEl     = document.getElementById('discord-webhook-url');
+  const discordStatusEl  = document.getElementById('discord-status');
+
+  function applyDiscordUiState(cfg) {
+    discordEnabledEl.checked    = cfg.enabled;
+    discordUrlEl.style.display  = cfg.enabled ? '' : 'none';
+    discordUrlEl.value          = cfg.webhookUrl || '';
+  }
+
+  function setDiscordStatus(msg, type) {
+    discordStatusEl.textContent  = msg;
+    discordStatusEl.className    = 'tide-discord-status' + (type ? ' ' + type : '');
+  }
+
+  applyDiscordUiState(loadDiscordConfig());
+
+  discordEnabledEl.addEventListener('change', () => {
+    const cfg = loadDiscordConfig();
+    cfg.enabled = discordEnabledEl.checked;
+    saveDiscordConfig(cfg);
+    applyDiscordUiState(cfg);
+    setDiscordStatus('', '');
+  });
+
+  discordUrlEl.addEventListener('input', () => {
+    const cfg = loadDiscordConfig();
+    cfg.webhookUrl = discordUrlEl.value.trim();
+    saveDiscordConfig(cfg);
+    setDiscordStatus('', '');
+  });
+
+
+  // リサイズ時 Canvas 再描画
+  window.addEventListener('resize', () => {
+    const nowMs = Date.now();
+    if (state.jcgSlice)  jcgRenderGraph(els.jcg, state.jcgSlice, nowMs);
+    if (state.jmaSliced) jmaRenderGraphs(els.jma, state.jmaSliced, nowMs);
+  });
+
+  // グラフホバー
+  attachGraphHover(els.jcg.canvasTide,
+    () => state.jcgSlice
+      ? { values: state.jcgSlice.values, startMs: state.jcgSlice.startMs, intervalMs: state.jcgSlice.intervalMs }
+      : null
+  );
+  attachGraphHover(els.jma.canvasTide,
+    () => state.jmaSliced
+      ? { values: state.jmaSliced.tide, startMs: state.jmaSliced.startMs, intervalMs: state.jmaSliced.intervalMs }
+      : null
+  );
+  attachGraphHover(els.jma.canvasDep,
+    () => state.jmaSliced
+      ? { values: state.jmaSliced.departure, startMs: state.jmaSliced.startMs, intervalMs: state.jmaSliced.intervalMs }
+      : null
+  );
+
+  // 観測点リスト読み込み
+  loadAndMergeStations(state, els, st => onStationSelected(st, state, els));
+
+  // tick ループ
+  setInterval(() => tick(state, els), 1000);
+  tick(state, els);
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+
+<!-- ═══ 統合ガイド ════════════════════════════════════════════
+  観測点リスト : JMA tide_area.json（166点）+ JCG 名前マッチで jcgId を付与
+  JCG データ  : /api/tide/jcg?station={4桁ID}  → 5分値・<pre>スクレイプ
+  JMA データ  : /proxy?url= 経由 tide_obs_{YYYYMMDD}_{6桁code}.json → 15秒値
+  グラフ共用  : drawTideGraph() を JCG・JMA・偏差で使い回し
+  自動更新    : 5分ごとに再フェッチ、毎秒 Canvas 再描画（現在時刻マーカー）
+════════════════════════════════════════════════════════════ -->
+
+</body>
+</html>

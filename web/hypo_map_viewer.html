@@ -1,0 +1,617 @@
+<!-- Created: 2026-05-10 JST -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>気象庁 速報値震源ビューア</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Share+Tech+Mono&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<link rel="stylesheet" href="../css/quakeview.css">
+</head>
+<body class="hypo-page">
+<div id="app">
+
+  <header>
+    <div style="display:flex;align-items:flex-end;gap:0">
+      <a href="../index.html" class="nav-logo">
+        <span class="nav-logo-icon">🌐</span>
+        <span class="nav-logo-text">QuakeView</span>
+      </a>
+      <span class="header-divider"></span>
+      <div>
+        <div class="logo-tag">Japan Meteorological Agency · bosai/hypo GeoJSON</div>
+        <h1>震源速報ビューア <small>無感地震含む</small></h1>
+      </div>
+    </div>
+    <div class="header-right">
+      <div id="clock">---</div>
+      <div class="live"><span class="dot"></span>AUTO 5min&nbsp;<span id="last-updated" style="opacity:.6"></span></div>
+    </div>
+  </header>
+
+  <div class="hypo-controls">
+    <div class="hypo-ctrl-group">
+      <span class="hypo-ctrl-label">期間</span>
+      <input type="datetime-local" id="date-from" step="60" style="width:12.5rem">
+      <span class="hypo-ctrl-label" style="margin:0 2px">〜</span>
+      <input type="datetime-local" id="date-to" step="60" style="width:12.5rem">
+    </div>
+    <div class="hypo-ctrl-group" style="margin-left:8px">
+      <span class="hypo-ctrl-label">M</span>
+      <input type="number" id="mag-min" value="0.0"  min="-9.9" max="9.9" step="0.1" style="width:52px">
+      <span class="hypo-ctrl-label">〜</span>
+      <input type="number" id="mag-max" value="9.9"  min="-9.9" max="9.9" step="0.1" style="width:52px">
+    </div>
+    <div class="hypo-ctrl-group">
+      <span class="hypo-ctrl-label">深さ</span>
+      <input type="number" id="dep-min" value="0"   min="0" max="999"  step="1" style="width:52px">
+      <span class="hypo-ctrl-label">〜</span>
+      <input type="number" id="dep-max" value="999"  min="0" max="999"  step="1" style="width:52px">
+      <span class="hypo-ctrl-label">km</span>
+    </div>
+    <div class="hypo-ctrl-group">
+      <span class="hypo-ctrl-label">震度</span>
+      <select id="sel-si">
+        <option value="all">すべて</option>
+        <option value="none">無感のみ</option>
+        <option value="felt">有感のみ</option>
+      </select>
+    </div>
+    <div class="hypo-ctrl-group">
+      <span class="hypo-ctrl-label">件数上限</span>
+      <select id="sel-limit">
+        <option value="500">500件</option>
+        <option value="1000" selected>1000件</option>
+        <option value="3000">3000件</option>
+        <option value="99999">全件</option>
+      </select>
+    </div>
+    <div id="count-info" style="margin-left:auto">---</div>
+    <button class="btn" id="btn-fetch" onclick="fetchAndRender()">▶ 描画</button>
+  </div>
+
+  <div id="main">
+    <div id="map-pane">
+      <div id="map"></div>
+      <div id="legend">
+        <div class="leg-title">DEPTH (km)</div>
+        <div class="leg-row"><span class="leg-dot" style="background:#ff3333"></span>&lt; 10</div>
+        <div class="leg-row"><span class="leg-dot" style="background:#ff7d2e"></span>10–29</div>
+        <div class="leg-row"><span class="leg-dot" style="background:#f0a500"></span>30–59</div>
+        <div class="leg-row"><span class="leg-dot" style="background:#aadd00"></span>60–99</div>
+        <div class="leg-row"><span class="leg-dot" style="background:#00c49a"></span>100–149</div>
+        <div class="leg-row"><span class="leg-dot" style="background:#4db8ff"></span>150–249</div>
+        <div class="leg-row"><span class="leg-dot" style="background:#a78bff"></span>250–399</div>
+        <div class="leg-row"><span class="leg-dot" style="background:#ff80ff"></span>≥ 400</div>
+        <div class="leg-title" style="margin-top:8px">SIZE = M</div>
+      </div>
+      <div id="loading">
+        <div>FETCHING HYPO DATA ...</div>
+        <div class="loader"><div class="loader-fill"></div></div>
+      </div>
+      <div id="error-toast"></div>
+    </div>
+
+    <div id="resizer"></div>
+
+    <div id="table-pane">
+      <div class="hypo-tbl-header">
+        <span class="hypo-tbl-header-title">HYPOCENTER LIST</span>
+        <span id="table-count" style="color:var(--cyan)"></span>
+        <button id="btn-collapse-panel" onclick="toggleTablePane()" title="リストを折りたたむ">◀</button>
+      </div>
+      <div class="hypo-tbl-scroll">
+        <table id="quake-tbl">
+          <thead>
+            <tr>
+              <th data-sort="time" class="sort-desc">時刻</th>
+              <th>震央地名</th>
+              <th data-sort="dep">深さ</th>
+              <th data-sort="mag">M</th>
+              <th data-sort="si">震度</th>
+            </tr>
+          </thead>
+          <tbody id="quake-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+'use strict';
+
+// ── 定数 ────────────────────────────────────────────────────
+const BASE = 'https://www.jma.go.jp/bosai/hypo/data';
+// 最大震度フィールド (si) のマッピング
+// null=無感, '1'〜'4','7'=数値震度, 'A'=5弱,'B'=5強,'C'=6弱,'D'=6強
+const SI_LABEL = {'1':'1','2':'2','3':'3','4':'4','7':'7','A':'5弱','B':'5強','C':'6弱','D':'6強'};
+const SI_CLASS = {'1':'si-1','2':'si-2','3':'si-3','4':'si-4','7':'si-7','A':'si-5','B':'si-5','C':'si-6','D':'si-6'};
+const SI_NUM   = {'1':1,'2':2,'3':3,'4':4,'7':7,'A':5,'B':5.5,'C':6,'D':6.5};
+
+// aflag: 不明のため生値をそのまま表示
+// flag: 震源決定フラグ（生値をそのまま表示）
+
+const MJ_LABEL = {'J':'Mj(旧)','D':'Mj','d':'Mj(2点)','V':'Mv','v':'Mv(2-3点)','W':'Mw','B':'mb','S':'Ms'};
+
+// 深さで色分け（earthquake_viz と同一グラジェント補間）
+// 0km 暗赤 → 10km 赤 → 20km 橙 → 30km 黄 → 50km 黄緑 → 100km 緑 → 200km シアン → 700km 青
+const DEP_COLOR_STOPS = [
+  [  0, [140,  42,  51]],
+  [ 10, [255,   0,   0]],
+  [ 20, [255, 165,   0]],
+  [ 30, [255, 255,   0]],
+  [ 50, [128, 255,   0]],
+  [100, [  0, 180,  80]],
+  [200, [  0, 200, 200]],
+  [700, [  0,  50, 200]],
+];
+const DEP_COLOR = d => {
+  if (d === null) return '#aaaaaa';
+  const depth = Math.max(0, d);
+  const last = DEP_COLOR_STOPS[DEP_COLOR_STOPS.length - 1];
+  if (depth >= last[0]) return `rgb(${last[1].join(',')})`;
+  for (let i = 0; i < DEP_COLOR_STOPS.length - 1; i++) {
+    const [d0, c0] = DEP_COLOR_STOPS[i];
+    const [d1, c1] = DEP_COLOR_STOPS[i + 1];
+    if (depth <= d1) {
+      const t = (depth - d0) / (d1 - d0);
+      const r = Math.round(c0[0] + t * (c1[0] - c0[0]));
+      const g = Math.round(c0[1] + t * (c1[1] - c0[1]));
+      const b = Math.round(c0[2] + t * (c1[2] - c0[2]));
+      return `rgb(${r},${g},${b})`;
+    }
+  }
+  return `rgb(${DEP_COLOR_STOPS[0][1].join(',')})`;
+};
+
+const MAG_RADIUS = m => {
+  if (m === null) return 4;
+  if (m < 1)  return 3;
+  if (m < 2)  return 4;
+  if (m < 3)  return 5;
+  if (m < 4)  return 7;
+  if (m < 5)  return 10;
+  if (m < 6)  return 14;
+  if (m < 7)  return 19;
+  return 26;
+};
+
+const pad = n => String(n).padStart(2,'0');
+
+// ── 状態 ────────────────────────────────────────────────────
+let allEvents   = [];
+let sortKey     = 'time';
+let sortDir     = -1;
+let shownEvents = [];
+let selectedIdx = -1;
+let mapReady    = false;
+let pendingRender = false;
+
+// ── 地図スタイル ─────────────────────────────────────────────
+const GSI_HILLSHADE_STYLE = {
+  version: 8,
+  sources: {
+    gsi: { type: 'raster',
+      tiles: ['https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png'],
+      tileSize: 256, attribution: '©国土地理院' },
+    hillshade: { type: 'raster',
+      tiles: ['https://cyberjapandata.gsi.go.jp/xyz/hillshademap/{z}/{x}/{y}.png'],
+      tileSize: 256 },
+  },
+  layers: [
+    { id: 'gsi',       type: 'raster', source: 'gsi' },
+    { id: 'hillshade', type: 'raster', source: 'hillshade',
+      paint: { 'raster-opacity': 0.3 } },
+  ]
+};
+
+// ── 地図初期化 ──────────────────────────────────────────────
+const map = new maplibregl.Map({
+  container: 'map',
+  style: GSI_HILLSHADE_STYLE,
+  center: [137, 36],
+  zoom: 5,
+});
+
+map.on('load', () => {
+  map.addSource('hypo', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+  map.addLayer({
+    id: 'hypo',
+    type: 'circle',
+    source: 'hypo',
+    paint: {
+      'circle-radius':       ['get', 'radius'],
+      'circle-color':        ['get', 'color'],
+      'circle-opacity':      ['get', 'opacity'],
+      'circle-stroke-color': ['get', 'strokeColor'],
+      'circle-stroke-width': ['get', 'strokeWidth'],
+    },
+  });
+  map.on('click', 'hypo', e => {
+    if (!e.features || !e.features.length) return;
+    const p = e.features[0].properties;
+    new maplibregl.Popup({ maxWidth: '240px' })
+      .setLngLat(e.lngLat)
+      .setHTML(p.popupHtml)
+      .addTo(map);
+    if (p.idx !== undefined) highlightRow(p.idx);
+  });
+  map.on('mouseenter', 'hypo', () => { map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', 'hypo', () => { map.getCanvas().style.cursor = ''; });
+  mapReady = true;
+  if (pendingRender) { pendingRender = false; _flushMarkers(); }
+});
+
+function eventKey(e) {
+  return `${e.time}|${e.lat}|${e.lon}|${e.dep}|${e.mag}`;
+}
+
+// ── 日付ユーティリティ ──────────────────────────────────────
+function todayJST() {
+  return new Date(Date.now() + 9*3600*1000).toISOString().slice(0,10); // "YYYY-MM-DD"
+}
+function nowJST() {
+  return new Date(Date.now() + 9*3600*1000).toISOString().slice(0,16); // "YYYY-MM-DDTHH:MM"
+}
+function startOfDayJST() {
+  return todayJST() + 'T00:00';
+}
+function datePartOf(dtLocal) { return dtLocal.slice(0,10); }
+function toCompact(s) { return s.replace(/-/g,''); }  // "YYYY-MM-DD" → "YYYYMMDD"
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0,10);
+}
+function dateRange(from, to) {
+  const dates = []; let cur = from;
+  while (cur <= to) { dates.push(cur); cur = addDays(cur, 1); }
+  return dates;
+}
+function buildURL(yyyymmdd) {
+  return `${BASE}/${yyyymmdd.slice(0,4)}/${yyyymmdd.slice(4,6)}/hypo${yyyymmdd}.geojson`;
+}
+function fmtTime(raw) {
+  return raw ? raw.replace('.', ' ') : '---';
+}
+
+// ── パース ──────────────────────────────────────────────────
+function parseGeo(geo) {
+  return (geo.features || []).map(f => {
+    const p = f.properties || {};
+    const c = (f.geometry  || {}).coordinates || [];
+    return {
+      time:  p.date  || '',
+      place: p.place || '',
+      lon:   c[0] != null ? c[0] : null,
+      lat:   c[1] != null ? c[1] : null,
+      dep:   isNaN(parseFloat(p.dep)) ? null : parseFloat(p.dep),
+      mag:   isNaN(parseFloat(p.mag)) ? null : parseFloat(p.mag),
+      mj:    String(p.mj    || '').trim(),
+      si:    String(p.si    || '').trim() || null,
+      aflag: String(p.aflag || '').trim() || null,
+      flag:  String(p.flag  || '').trim() || null,
+    };
+  });
+}
+
+// ── データ取得（複数日並列） ─────────────────────────────────
+async function fetchAndRender() {
+  const fromVal = document.getElementById('date-from').value; // "YYYY-MM-DDTHH:MM"
+  const toVal   = document.getElementById('date-to').value;
+  if (!fromVal || !toVal)  { showError('期間を指定してください'); return; }
+  if (fromVal > toVal)     { showError('開始日時 ≤ 終了日時 にしてください'); return; }
+
+  const fromDate = datePartOf(fromVal);
+  const toDate   = datePartOf(toVal);
+  const dates    = dateRange(fromDate, toDate);
+  if (dates.length > 60)   { showError('期間は最大60日までにしてください'); return; }
+
+  document.getElementById('loading').style.display = 'flex';
+  document.getElementById('btn-fetch').disabled = true;
+  hideError(); clearMarkers();
+
+  const results = await Promise.allSettled(
+    dates.map(d =>
+      fetch(buildURL(toCompact(d)), { cache:'no-cache' })
+        .then(r => r.ok ? r.json() : null)
+    )
+  );
+
+  // 時刻フィルタ（分単位、JST基準）
+  const fromMs = new Date(fromVal + ':00+09:00').getTime();
+  const toMs   = new Date(toVal   + ':59+09:00').getTime();
+  const validFrom = !isNaN(fromMs), validTo = !isNaN(toMs);
+
+  // e.time → UNIX ms (JST)
+  // "YYYY/MM/DD.HH:MM" (現行) または "YYYYMMDD.HHMMSS" (旧) を両対応
+  function eventTimeMs(raw) {
+    if (!raw) return NaN;
+    const s = raw.trim();
+    if (s.includes('/')) {
+      const dot  = s.indexOf('.');
+      const date = s.slice(0, dot).replace(/\//g, '-');
+      const time = s.slice(dot + 1);
+      return new Date(`${date}T${time}:00+09:00`).getTime();
+    }
+    const sep = s[8];
+    const d8  = s.slice(0, 8);
+    const t6  = (sep === '.' || sep === ' ')
+      ? s.slice(9, 15).padEnd(6, '0')
+      : s.slice(8, 14).padEnd(6, '0');
+    const iso = `${d8.slice(0,4)}-${d8.slice(4,6)}-${d8.slice(6,8)}`
+              + `T${t6.slice(0,2)}:${t6.slice(2,4)}:${t6.slice(4,6)}+09:00`;
+    return new Date(iso).getTime();
+  }
+
+  allEvents = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value) {
+      for (const e of parseGeo(r.value)) {
+        // 時刻情報がない or フィルタ範囲が無効なら無条件に含める
+        if (!e.time || !validFrom || !validTo) { allEvents.push(e); continue; }
+        const ms = eventTimeMs(e.time);
+        if (isNaN(ms) || (ms >= fromMs && ms <= toMs)) allEvents.push(e);
+      }
+    }
+  }
+  allEvents.sort((a,b) => a.time < b.time ? -1 : 1);
+
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('btn-fetch').disabled = false;
+  render();
+}
+
+// ── フィルタ ─────────────────────────────────────────────────
+function applyFilter(evs) {
+  const magMin = parseFloat(document.getElementById('mag-min').value);
+  const magMax = parseFloat(document.getElementById('mag-max').value);
+  const depMin = parseFloat(document.getElementById('dep-min').value);
+  const depMax = parseFloat(document.getElementById('dep-max').value);
+  const siMode = document.getElementById('sel-si').value;
+  return evs.filter(e => {
+    if (!isNaN(magMin) && e.mag !== null && e.mag < magMin) return false;
+    if (!isNaN(magMax) && e.mag !== null && e.mag > magMax) return false;
+    if (!isNaN(depMin) && e.dep !== null && e.dep < depMin) return false;
+    if (!isNaN(depMax) && e.dep !== null && e.dep > depMax) return false;
+    const hasSI = e.si !== null && e.si in SI_LABEL;
+    if (siMode === 'none' && hasSI)  return false;
+    if (siMode === 'felt' && !hasSI) return false;
+    return true;
+  });
+}
+
+// ── メインレンダリング ──────────────────────────────────────
+function render() {
+  let evs = applyFilter(allEvents);
+  evs.sort((a,b) => {
+    let va = a[sortKey], vb = b[sortKey];
+    if (sortKey === 'si') {
+      va = a.si ? (SI_NUM[a.si] ?? 0) : -1;
+      vb = b.si ? (SI_NUM[b.si] ?? 0) : -1;
+    }
+    if (va === null || va === '') return 1;
+    if (vb === null || vb === '') return -1;
+    return sortDir * (va < vb ? -1 : va > vb ? 1 : 0);
+  });
+  const limit = parseInt(document.getElementById('sel-limit').value);
+  const shown = evs.slice(0, limit);
+  document.getElementById('count-info').innerHTML =
+    `<b>${shown.length}</b> / ${evs.length} 件 (全 ${allEvents.length} 件)`;
+  document.getElementById('table-count').textContent = shown.length + ' 件';
+  shownEvents = shown;
+  _flushMarkersOrDefer();
+  renderTable(shown);
+}
+
+// ── 地図マーカー（GeoJSON source 更新） ─────────────────────
+function _flushMarkersOrDefer() {
+  if (!mapReady) { pendingRender = true; return; }
+  _flushMarkers();
+}
+
+function _flushMarkers() {
+  const features = [];
+  shownEvents.forEach((e, idx) => {
+    if (e.lat === null || e.lon === null) return;
+    const color   = DEP_COLOR(e.dep);
+    const radius  = MAG_RADIUS(e.mag);
+    const isFelt  = e.si !== null && e.si in SI_LABEL;
+    const siStr   = e.si ? (SI_LABEL[e.si] || e.si) : '無感';
+    const siCls   = e.si ? (SI_CLASS[e.si] || 'si-5') : 'si-none';
+    const mc      = magClass(e.mag);
+    const mjStr   = e.mj ? (MJ_LABEL[e.mj] || e.mj) : '';
+    const extra   = [e.aflag ? `aflag:${e.aflag}` : '', e.flag ? `flag:${e.flag}` : ''].filter(Boolean).join(' ');
+    const popupHtml =
+      `<div class="popup-time">${fmtTime(e.time)}</div>` +
+      `<div class="popup-place">${e.place || '---'}</div>` +
+      `<div class="popup-row">` +
+        `<span class="mag ${mc}">${e.mag !== null ? e.mag.toFixed(1) : '---'}${mjStr ? ` <small style="font-weight:300;font-size:9px">${mjStr}</small>` : ''}</span>` +
+        `<span class="si ${siCls}">${siStr}</span>` +
+        `<span class="popup-dep">深さ ${e.dep !== null ? e.dep + 'km' : '---'}</span>` +
+      `</div>` +
+      (extra ? `<div style="margin-top:5px;font-family:var(--mono);font-size:10px;color:#5a8099">${extra}</div>` : '');
+
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [e.lon, e.lat] },
+      properties: {
+        idx,
+        color,
+        radius,
+        opacity:     isFelt ? 0.9 : 0.75,
+        strokeColor: isFelt ? '#333333' : 'rgba(0,0,0,0.3)',
+        strokeWidth: isFelt ? 1.2 : 0.5,
+        popupHtml,
+      },
+    });
+  });
+  features.reverse(); // 古いイベントが後ろに来るよう逆転
+  map.getSource('hypo').setData({ type: 'FeatureCollection', features });
+}
+
+function clearMarkers() {
+  if (mapReady) map.getSource('hypo').setData({ type: 'FeatureCollection', features: [] });
+  shownEvents = [];
+}
+
+// ── テーブル ────────────────────────────────────────────────
+function renderTable(evs) {
+  const tbody = document.getElementById('quake-body');
+  tbody.innerHTML = '';
+  evs.forEach((e, idx) => {
+    const tr = document.createElement('tr');
+    tr.style.animationDelay = `${Math.min(idx*8,400)}ms`;
+    tr.dataset.idx = idx;
+    const mc     = magClass(e.mag);
+    const isFelt = e.si !== null && e.si in SI_LABEL;
+    const siStr  = isFelt ? SI_LABEL[e.si] : null;
+    const siCls  = isFelt ? (SI_CLASS[e.si] || 'si-5') : 'si-none';
+    const depCol = e.dep === null ? '' : e.dep < 30 ? 'color:#ff7d2e' : e.dep < 100 ? 'color:#f0a500' : 'color:#4db8ff';
+    tr.innerHTML = `
+      <td class="td-time">${fmtTime(e.time)}</td>
+      <td class="td-region" title="${e.place}">${e.place||'---'}</td>
+      <td class="td-num" style="font-family:var(--mono);font-size:10px;${depCol}">${e.dep!==null?e.dep+'km':'---'}</td>
+      <td><span class="mag ${mc}">${e.mag!==null?e.mag.toFixed(1):'---'}</span></td>
+      <td><span class="si ${siCls}">${siStr||'無感'}</span></td>
+    `;
+    tr.onclick = () => {
+      if (e.lat !== null && e.lon !== null) {
+        map.flyTo({ center: [e.lon, e.lat], zoom: Math.max(map.getZoom(), 7) });
+      }
+      highlightRow(idx);
+    };
+    tbody.appendChild(tr);
+  });
+}
+
+function highlightRow(idx) {
+  document.querySelectorAll('#quake-body tr').forEach(r => r.classList.remove('highlighted'));
+  const tr = document.querySelector(`#quake-body tr[data-idx="${idx}"]`);
+  if (tr) { tr.classList.add('highlighted'); tr.scrollIntoView({ block:'nearest', behavior:'smooth' }); }
+  selectedIdx = idx;
+}
+
+// ── ヘルパー ────────────────────────────────────────────────
+function magClass(m) {
+  if (m===null) return 'mag-nd';
+  if (m<1) return 'mag-1'; if (m<2) return 'mag-1'; if (m<3) return 'mag-2';
+  if (m<4) return 'mag-3'; if (m<5) return 'mag-4'; if (m<6) return 'mag-5';
+  if (m<7) return 'mag-6'; return 'mag-7';
+}
+function showError(msg) {
+  const t = document.getElementById('error-toast');
+  t.textContent = msg; t.style.display = 'block';
+  setTimeout(() => t.style.display='none', 6000);
+}
+function hideError() { document.getElementById('error-toast').style.display = 'none'; }
+
+// ── テーブルパネル折りたたみ ────────────────────────────────
+let tablePaneWidth = null;
+
+function toggleTablePane() {
+  const pane     = document.getElementById('table-pane');
+  const resizer  = document.getElementById('resizer');
+  const btn      = document.getElementById('btn-collapse-panel');
+  const isNowCollapsed = pane.classList.toggle('collapsed');
+
+  if (isNowCollapsed) {
+    tablePaneWidth = pane.style.width || null;  // リサイズ済み幅を保存
+    resizer.style.display = 'none';
+    btn.textContent = '▶';
+    btn.title = 'リストを展開する';
+  } else {
+    resizer.style.display = '';
+    if (tablePaneWidth) pane.style.width = tablePaneWidth;
+    btn.textContent = '◀';
+    btn.title = 'リストを折りたたむ';
+  }
+  // MapLibre 地図サイズを再計算
+  setTimeout(() => map.resize(), 260);
+}
+
+// ── ソート ──────────────────────────────────────────────────
+document.querySelectorAll('th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = -1; }
+    document.querySelectorAll('th[data-sort]').forEach(t => t.classList.remove('sort-asc','sort-desc'));
+    th.classList.add(sortDir === -1 ? 'sort-desc' : 'sort-asc');
+    render();
+  });
+});
+
+// フィルタ変更（再描画のみ、再取得しない）
+['sel-si','sel-limit'].forEach(id =>
+  document.getElementById(id).addEventListener('change', () => { if (allEvents.length) render(); })
+);
+
+// ── パネルリサイザー ─────────────────────────────────────────
+let isResizing = false;
+document.getElementById('resizer').addEventListener('mousedown', e => { isResizing=true; e.preventDefault(); });
+document.addEventListener('mousemove', e => {
+  if (!isResizing) return;
+  const rect = document.getElementById('main').getBoundingClientRect();
+  document.getElementById('table-pane').style.width = Math.max(280, Math.min(700, rect.right - e.clientX)) + 'px';
+  map.resize();
+});
+document.addEventListener('mouseup', () => { isResizing = false; });
+
+// ── 時計 ────────────────────────────────────────────────────
+function updateClock() {
+  const j = new Date(Date.now() + 9*3600*1000);
+  document.getElementById('clock').textContent =
+    `${j.getUTCFullYear()}/${pad(j.getUTCMonth()+1)}/${pad(j.getUTCDate())} ${pad(j.getUTCHours())}:${pad(j.getUTCMinutes())}:${pad(j.getUTCSeconds())} JST`;
+}
+updateClock(); setInterval(updateClock, 1000);
+
+// ── 初期化（デフォルト: 今日） ───────────────────────────────
+document.getElementById('date-from').value = startOfDayJST();
+document.getElementById('date-to').value   = nowJST();
+fetchAndRender();
+
+// ── 5分ごとの自動更新 ────────────────────────────────────────
+function isDateToLive() {
+  // date-to が現在時刻から5分以内なら「最新」と判定
+  const toVal = document.getElementById('date-to').value;
+  if (!toVal) return false;
+  const toMs = new Date(toVal + ':00+09:00').getTime();
+  return Math.abs(Date.now() - toMs) <= 5 * 60 * 1000;
+}
+
+async function autoRefresh() {
+  if (!isDateToLive()) return; // date-to が過去に固定されていればスキップ
+  document.getElementById('date-to').value = nowJST();
+  await fetchAndRender();
+  const j = new Date(Date.now() + 9*3600*1000);
+  const pad2 = n => String(n).padStart(2,'0');
+  document.getElementById('last-updated').textContent =
+    `${pad2(j.getUTCHours())}:${pad2(j.getUTCMinutes())}:${pad2(j.getUTCSeconds())} 更新`;
+}
+
+// fetchAndRender完了後に更新時刻を表示（初回分）
+(async () => {
+  await new Promise(r => setTimeout(r, 500)); // 初回fetchAndRenderの完了を待つ
+  const j = new Date(Date.now() + 9*3600*1000);
+  const pad2 = n => String(n).padStart(2,'0');
+  document.getElementById('last-updated').textContent =
+    `${pad2(j.getUTCHours())}:${pad2(j.getUTCMinutes())}:${pad2(j.getUTCSeconds())} 更新`;
+})();
+
+setInterval(autoRefresh, 5 * 60 * 1000); // 5分 = 300000ms
+
+window.fetchAndRender  = fetchAndRender;
+window.toggleTablePane = toggleTablePane;
+})();
+</script>
+</body>
+</html>

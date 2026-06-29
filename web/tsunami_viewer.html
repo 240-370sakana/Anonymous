@@ -1,0 +1,426 @@
+<!-- Created: 2026-06-01 JST -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>津波情報ビューア — QuakeView</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/quakeview.css">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+</head>
+<body class="tsun-body">
+
+<!-- ── ヘッダー ──────────────────────────────────────────────── -->
+<header class="tsun-header">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <a href="../index.html" class="nav-logo">
+      <span class="nav-logo-icon">🌊</span>
+      <span class="nav-logo-text">QuakeView</span>
+    </a>
+    <span class="header-divider"></span>
+    <div>
+      <div class="logo-tag">TSUNAMI MONITOR</div>
+      <h1>津波情報ビューア <small>Tsunami Warning</small></h1>
+    </div>
+  </div>
+  <div class="header-right">
+    <div id="tsun-clock" style="font-family:var(--mono);font-size:11px;color:var(--amber);"></div>
+    <div class="live" style="margin-top:4px;"><span class="dot"></span><span>LIVE</span></div>
+  </div>
+</header>
+
+<!-- ── メインエリア ──────────────────────────────────────────── -->
+<div class="tsun-main">
+
+  <!-- 地図 -->
+  <div class="tsun-map-wrap">
+    <div id="tsun-map" class="tsun-map"></div>
+  </div>
+
+  <!-- 右パネル -->
+  <aside class="tsun-panel">
+
+    <!-- ステータスバナー -->
+    <div id="tsun-status" class="tsun-status tsun-status--none">
+      <div class="tsun-status-icon" id="tsun-status-icon">🌊</div>
+      <div>
+        <div id="tsun-status-level" class="tsun-status-level">読み込み中…</div>
+        <div id="tsun-status-sub"   class="tsun-status-sub">—</div>
+      </div>
+    </div>
+
+    <!-- 地域リスト -->
+    <div class="tsun-section-title">対象地域</div>
+    <div id="tsun-area-list" class="tsun-area-list">
+      <div class="tsun-loading">データを読み込み中…</div>
+    </div>
+
+    <!-- フッター -->
+    <div class="tsun-footer">
+      <span id="tsun-updated">—</span>
+      <button class="btn" id="tsun-refresh-btn">↺ 更新</button>
+    </div>
+    <div class="tsun-source">
+      <a href="https://www.jma.go.jp/bosai/map.html#&elem=warn&contents=tsunami"
+         target="_blank" rel="noopener">気象庁公式サイト ↗</a>
+    </div>
+
+  </aside>
+</div>
+
+<script>
+// ── 定数 ──────────────────────────────────────────────────────────────────
+const PROXY       = 'http://localhost:8765/proxy?url=';
+const API_TSUNAMI = 'http://localhost:8765/api/tsunami';
+const POLL_MS     = 60_000;
+
+const GRADE_META = {
+  MajorWarning: { label: '大津波警報', cls: 'major',   dotCls: 'major',   icon: '🟣', color: '#c060ff' },
+  Warning:      { label: '津波警報',   cls: 'warning', dotCls: 'warning', icon: '🔴', color: '#ff4c4c' },
+  Watch:        { label: '津波注意報', cls: 'watch',   dotCls: 'watch',   icon: '🟡', color: '#ffd000' },
+  None:         { label: '津波警報等なし', cls: 'none', dotCls: '', icon: '🌊', color: '#4a6080' },
+};
+
+// ── 要素収集 ──────────────────────────────────────────────────────────────
+function collectEls(root) {
+  const $ = id => root.getElementById(id);
+  return {
+    clock:       $('tsun-clock'),
+    status:      $('tsun-status'),
+    statusIcon:  $('tsun-status-icon'),
+    statusLevel: $('tsun-status-level'),
+    statusSub:   $('tsun-status-sub'),
+    areaList:    $('tsun-area-list'),
+    updated:     $('tsun-updated'),
+    refreshBtn:  $('tsun-refresh-btn'),
+  };
+}
+
+// ── 純粋ロジック ──────────────────────────────────────────────────────────
+function topGrade(areas) {
+  const order = ['MajorWarning', 'Warning', 'Watch', 'None'];
+  for (const g of order) {
+    if (areas.some(a => a.grade === g)) return g;
+  }
+  return 'None';
+}
+
+function groupByGrade(areas) {
+  const groups = { MajorWarning: [], Warning: [], Watch: [], None: [] };
+  for (const a of areas) {
+    const key = a.grade in groups ? a.grade : 'None';
+    groups[key].push(a);
+  }
+  return groups;
+}
+
+function fmtTime(isoStr) {
+  if (!isoStr) return '—';
+  try {
+    return new Date(isoStr).toLocaleString('ja-JP', {
+      timeZone: 'Asia/Tokyo',
+      month: 'numeric', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+  } catch { return isoStr; }
+}
+
+function fmtHeight(maxHeight) {
+  if (!maxHeight) return '—';
+  return maxHeight.description ?? maxHeight.value ?? '—';
+}
+
+function fmtArrival(firstHeight) {
+  if (!firstHeight) return { cond: '—', time: '' };
+  const cond = firstHeight.condition ?? '';
+  const time = firstHeight.arrivalTime ? fmtTime(firstHeight.arrivalTime) : '';
+  return { cond: cond || time || '—', time: cond && time ? time : '' };
+}
+
+// ── 描画：ステータスバナー ────────────────────────────────────────────────
+function renderStatus(els, grade, rdt) {
+  const meta = GRADE_META[grade] ?? GRADE_META.None;
+  const status = els.status;
+  ['none','watch','warning','major'].forEach(c => status.classList.remove(`tsun-status--${c}`));
+  status.classList.add(`tsun-status--${meta.cls}`);
+  els.statusIcon.textContent  = meta.icon;
+  els.statusLevel.textContent = meta.label;
+  els.statusSub.textContent   = rdt ? `発表: ${fmtTime(rdt)}` : '現在、発表なし';
+}
+
+// ── 描画：地域リスト ──────────────────────────────────────────────────────
+function renderAreaList(el, groups) {
+  const hasWarning = ['MajorWarning','Warning','Watch'].some(g => groups[g]?.length > 0);
+
+  if (!hasWarning) {
+    el.innerHTML = '<div class="tsun-no-warning">現在、津波警報等は<br>発表されていません。</div>';
+    return;
+  }
+
+  let html = '';
+  for (const grade of ['MajorWarning', 'Warning', 'Watch']) {
+    const areas = groups[grade];
+    if (!areas?.length) continue;
+    const meta = GRADE_META[grade];
+    html += `<div class="tsun-grade-group">
+      <div class="tsun-grade-header">
+        <span class="tsun-grade-dot tsun-grade-dot--${meta.dotCls}"></span>
+        ${meta.label}（${areas.length}区域）
+      </div>`;
+    for (const a of areas) {
+      const height  = fmtHeight(a.maxHeight);
+      const arrival = fmtArrival(a.firstHeight);
+      html += `<div class="tsun-area-item">
+        <span class="tsun-area-name">${a.name ?? a.code}</span>
+        <span class="tsun-area-height tsun-area-height--${meta.dotCls}">${height}</span>
+        <span class="tsun-area-arrival">${arrival.cond}</span>
+        <span class="tsun-area-arrival-val">${arrival.time}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+// ── 描画：地図レイヤー ────────────────────────────────────────────────────
+function colorByGrade(grade) {
+  // NHKスタイル：太い海岸ラインで表現。fill は極薄のグロー用
+  switch (grade) {
+    case 'MajorWarning': return { fill: '#cc44ff', fillOpacity: 0.18, line: '#dd66ff', lineWidth: 7,  glowColor: '#cc44ff', glowWidth: 14 };
+    case 'Warning':      return { fill: '#ff2020', fillOpacity: 0.13, line: '#ff3030', lineWidth: 6,  glowColor: '#ff2020', glowWidth: 12 };
+    case 'Watch':        return { fill: '#ffcc00', fillOpacity: 0.10, line: '#ffdd00', lineWidth: 5,  glowColor: '#ffcc00', glowWidth: 10 };
+    default:             return { fill: '#000000', fillOpacity: 0,    line: '#2a3545', lineWidth: 0.4, glowColor: '#000000', glowWidth: 0 };
+  }
+}
+
+function findGradeByCode(code, groups) {
+  for (const grade of ['MajorWarning', 'Warning', 'Watch']) {
+    if (groups[grade]?.some(a => String(a.code) === String(code))) return grade;
+  }
+  return 'None';
+}
+
+function styleFeature(f, groups) {
+  const code  = f.properties?.code ?? f.properties?.areaCode;
+  const grade = findGradeByCode(code, groups);
+  const s     = colorByGrade(grade);
+  return {
+    ...f,
+    properties: {
+      ...f.properties,
+      fillColor:  s.fill,      fillOpacity: s.fillOpacity,
+      lineColor:  s.line,      lineWidth:   s.lineWidth,
+      glowColor:  s.glowColor, glowWidth:   s.glowWidth,
+    },
+  };
+}
+
+function updateMapLayers(mapInst, geojsonData, groups) {
+  if (!mapInst || !geojsonData) return;
+  const features = (geojsonData.features || []).map(f => styleFeature(f, groups));
+  const source = mapInst.getSource('tsun-areas');
+  if (source) {
+    source.setData({ type: 'FeatureCollection', features });
+  }
+}
+
+// ── データ取得 ────────────────────────────────────────────────────────────
+async function fetchJSON(url) {
+  const res = await fetch(PROXY + encodeURIComponent(url));
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function loadLatestBulletin() {
+  const res = await fetch(API_TSUNAMI);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  // {rdt, infoType, areas: [{code, name, grade, maxHeight, firstHeight}]}
+  return data;
+}
+
+const GSI_PALE_STYLE = {
+  version: 8,
+  sources: { gsi: { type: 'raster',
+    tiles: ['https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png'],
+    tileSize: 256, attribution: '©国土地理院' }},
+  layers: [{ id: 'gsi', type: 'raster', source: 'gsi' }]
+};
+
+async function loadAreaGeoJSON(mapInst) {
+  const urls = [
+    'https://www.jma.go.jp/bosai/tsunami/const/area.geojson',
+    'https://www.jma.go.jp/bosai/tsunami/data/warn/area.geojson',
+  ];
+  for (const url of urls) {
+    try {
+      const geojson = await fetchJSON(url);
+      // 全 feature に初期スタイル（None）を付与
+      const noneStyle = colorByGrade('None');
+      const features = (geojson.features || []).map(f => {
+        const name = f.properties?.name ?? f.properties?.areaName ?? '';
+        return {
+          ...f,
+          properties: {
+            ...f.properties, _name: name,
+            fillColor: noneStyle.fill,      fillOpacity: noneStyle.fillOpacity,
+            lineColor: noneStyle.line,      lineWidth:   noneStyle.lineWidth,
+            glowColor: noneStyle.glowColor, glowWidth:   noneStyle.glowWidth,
+          },
+        };
+      });
+      const initialData = { type: 'FeatureCollection', features };
+
+      // map.on('load') が既に発火済みかどうかチェック
+      function addLayers() {
+        mapInst.addSource('tsun-areas', { type: 'geojson', data: initialData });
+
+        // ① 薄いグロー（警報エリアの発光効果）
+        mapInst.addLayer({
+          id: 'tsun-glow',
+          type: 'line',
+          source: 'tsun-areas',
+          paint: {
+            'line-color':   ['get', 'glowColor'],
+            'line-width':   ['get', 'glowWidth'],
+            'line-opacity': 0.25,
+            'line-blur':    4,
+          },
+        });
+
+        // ② 塗りつぶし（極薄：グロー補助）
+        mapInst.addLayer({
+          id: 'tsun-fill',
+          type: 'fill',
+          source: 'tsun-areas',
+          paint: {
+            'fill-color':   ['get', 'fillColor'],
+            'fill-opacity': ['get', 'fillOpacity'],
+          },
+        });
+
+        // ③ メインライン（太い海岸ライン）
+        mapInst.addLayer({
+          id: 'tsun-line',
+          type: 'line',
+          source: 'tsun-areas',
+          paint: {
+            'line-color':   ['get', 'lineColor'],
+            'line-width':   ['get', 'lineWidth'],
+            'line-opacity': 0.95,
+          },
+        });
+
+        let popup = null;
+        mapInst.on('mousemove', 'tsun-fill', e => {
+          if (!e.features || !e.features.length) return;
+          mapInst.getCanvas().style.cursor = 'pointer';
+          const name = e.features[0].properties?._name;
+          if (!name) return;
+          if (!popup) {
+            popup = new maplibregl.Popup({ closeButton: false, className: 'tsun-map-popup', offset: 8 });
+          }
+          popup.setLngLat(e.lngLat).setHTML(`<span class="tsun-tooltip">${name}</span>`).addTo(mapInst);
+        });
+        mapInst.on('mouseleave', 'tsun-fill', () => {
+          mapInst.getCanvas().style.cursor = '';
+          if (popup) { popup.remove(); popup = null; }
+        });
+      }
+
+      if (mapInst.loaded()) {
+        addLayers();
+      } else {
+        mapInst.on('load', addLayers);
+      }
+
+      return initialData; // geojsonData として返す（updateMapLayers で使用）
+    } catch { /* 次のURLを試す */ }
+  }
+  return null;
+}
+
+// ── ポーリング（統合エントリ） ────────────────────────────────────────────
+async function poll(mapInst, geojsonDataRef, els) {
+  try {
+    const result = await loadLatestBulletin();
+
+    let grade  = 'None';
+    let groups = { MajorWarning: [], Warning: [], Watch: [], None: [] };
+    let rdt    = null;
+
+    if (result) {
+      rdt = result.rdt;
+      // 解除・取消は警報なし扱い
+      if (result.infoType !== '解除' && result.infoType !== '取消') {
+        const areas = result.areas ?? [];
+        grade  = topGrade(areas);
+        groups = groupByGrade(areas);
+      }
+    }
+
+    renderStatus(els, grade, rdt);
+    renderAreaList(els.areaList, groups);
+    updateMapLayers(mapInst, geojsonDataRef.current, groups);
+
+    els.updated.textContent = `更新: ${new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}`;
+  } catch (e) {
+    console.error('[tsun] 取得エラー:', e);
+    els.statusLevel.textContent = 'データ取得エラー';
+    els.statusSub.textContent   = 'プロキシサーバが起動しているか確認してください';
+  }
+}
+
+// ── 地図初期化 ────────────────────────────────────────────────────────────
+function initMap() {
+  const mapInst = new maplibregl.Map({
+    container: 'tsun-map',
+    style: GSI_PALE_STYLE,
+    center: [136.5, 36.5],
+    zoom: 5,
+  });
+  return mapInst;
+}
+
+// ── 時計 ─────────────────────────────────────────────────────────────────
+function initClock(el) {
+  const tick = () => {
+    el.textContent = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  };
+  tick();
+  setInterval(tick, 1000);
+}
+
+// ── 初期化 ────────────────────────────────────────────────────────────────
+async function init() {
+  const els = collectEls(document);
+  initClock(els.clock);
+
+  const mapInst       = initMap();
+  const geojsonDataRef = { current: null };
+
+  // GeoJSON読み込みと初回ポーリングを並行
+  await Promise.all([
+    loadAreaGeoJSON(mapInst).then(data => { geojsonDataRef.current = data; }),
+    poll(mapInst, geojsonDataRef, els),
+  ]);
+
+  setInterval(() => poll(mapInst, geojsonDataRef, els), POLL_MS);
+  els.refreshBtn.addEventListener('click', () => poll(mapInst, geojsonDataRef, els));
+}
+
+init();
+
+/* ═══ 統合ガイド ═══════════════════════════════════════════════
+  読み込む場所  : personal/realtime.html の <script src="../web/..."> に追加可
+  呼び出す場所  : 独立ページとして動作。init() が自動実行
+  データソース  : JMA Bosai 津波情報 API（プロキシ経由）
+  追加するDOM   : 不要（自己完結）
+════════════════════════════════════════════════════════════════ */
+</script>
+</body>
+</html>

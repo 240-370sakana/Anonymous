@@ -1,0 +1,1079 @@
+<!-- Created: 2026-06-03 JST -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>津波情報・験潮統合ビューア — QuakeView</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/quakeview.css">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+</head>
+<body class="tsjp-body">
+
+<!-- ── ヘッダー ──────────────────────────────────────────────── -->
+<header class="tsun-header">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <a href="../index.html" class="nav-logo">
+      <span class="nav-logo-icon">🌊</span>
+      <span class="nav-logo-text">QuakeView</span>
+    </a>
+    <span class="header-divider"></span>
+    <div>
+      <div class="logo-tag">TSUNAMI + TIDE</div>
+      <h1>津波情報・験潮統合ビューア <small>Integrated Monitor</small></h1>
+    </div>
+  </div>
+  <div class="header-right">
+    <div id="tsjp-clock" style="font-family:var(--mono);font-size:11px;color:var(--amber);"></div>
+    <div class="live" style="margin-top:4px;"><span class="dot"></span><span>LIVE</span></div>
+  </div>
+</header>
+
+<!-- ── メイングリッド ──────────────────────────────────────── -->
+<div class="tsjp-root">
+
+  <!-- 左：地図 -->
+  <div class="tsjp-map-col">
+    <div id="tsjp-map" class="tsjp-map"></div>
+  </div>
+
+  <!-- 右：パネル列 -->
+  <div class="tsjp-panel-col">
+
+    <!-- 上段：タブ（津波情報） -->
+    <div class="tsjp-upper">
+      <div class="tsjp-tabs">
+        <button class="tsjp-tab tsjp-tab--active" data-tab="warning">気象庁 津波情報</button>
+        <button class="tsjp-tab" data-tab="predict">津波発生予測</button>
+      </div>
+
+      <!-- 気象庁津波情報ペイン -->
+      <div class="tsjp-pane tsjp-pane--active" id="tsjp-pane-warning">
+        <div class="tsjp-warn-banner tsjp-warn-banner--none" id="tsjp-warn-banner">
+          <div class="tsjp-warn-icon"    id="tsjp-warn-icon">🌊</div>
+          <div>
+            <div class="tsjp-warn-level" id="tsjp-warn-level">読み込み中…</div>
+            <div class="tsjp-warn-sub"   id="tsjp-warn-sub">—</div>
+          </div>
+          <div class="tsjp-warn-updated" id="tsjp-warn-updated"></div>
+        </div>
+        <div class="tsjp-area-list" id="tsjp-area-list">
+          <div class="tsjp-no-warn">データ取得中…</div>
+        </div>
+      </div>
+
+      <!-- 津波発生予測ペイン（WIP） -->
+      <div class="tsjp-pane" id="tsjp-pane-predict">
+        <div class="tsjp-wip">
+          <div class="tsjp-wip-tag">WIP</div>
+          <div class="tsjp-wip-text">津波発生予測</div>
+          <div style="font-size:10px;color:var(--text-mid);margin-top:4px;">実装予定</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 下段：験潮データ -->
+    <div class="tsjp-lower">
+      <div class="tsjp-tide-hdr">
+        <span class="tsjp-tide-title">験潮データ</span>
+        <button class="tsjp-station-btn" id="tsjp-station-btn">観測点を選択…</button>
+        <div class="tsjp-src-btns">
+          <button class="tsjp-src-btn tsjp-src-btn--active" id="tsjp-src-jcg">海保</button>
+          <button class="tsjp-src-btn"                       id="tsjp-src-jma">JMA潮位</button>
+          <button class="tsjp-src-btn"                       id="tsjp-src-dep">JMA偏差</button>
+        </div>
+      </div>
+
+      <!-- 観測点ドロワー -->
+      <div class="tsjp-drawer" id="tsjp-drawer">
+        <input type="text" class="tsjp-drawer-search" id="tsjp-drawer-search"
+               placeholder="地点名・地域で検索…" autocomplete="off">
+        <div class="tsjp-drawer-list" id="tsjp-drawer-list"></div>
+      </div>
+
+      <!-- グラフ3段 -->
+      <div class="tsjp-graph-area" id="tsjp-section-jcg" style="display:none;">
+        <div class="tsjp-graph-label" style="color:var(--teal);">潮位観測（海保 5分値） cm</div>
+        <canvas class="tsjp-canvas" id="tsjp-canvas-jcg"></canvas>
+        <div class="tsjp-graph-err" id="tsjp-err-jcg">JCGデータなし</div>
+      </div>
+      <div class="tsjp-graph-area" id="tsjp-section-jma" style="display:none;">
+        <div class="tsjp-graph-label" style="color:var(--cyan);">潮位観測（JMA 15秒値） cm</div>
+        <canvas class="tsjp-canvas" id="tsjp-canvas-jma"></canvas>
+        <div class="tsjp-graph-err" id="tsjp-err-jma">JMAデータなし</div>
+      </div>
+      <div class="tsjp-graph-area" id="tsjp-section-dep" style="display:none;">
+        <div class="tsjp-graph-label" style="color:var(--amber);">偏差（観測値 − 天文潮位） cm</div>
+        <canvas class="tsjp-canvas tsjp-canvas--dep" id="tsjp-canvas-dep"></canvas>
+        <div class="tsjp-graph-err" id="tsjp-err-dep">偏差データなし</div>
+      </div>
+      <div class="tsjp-graph-err" id="tsjp-graph-empty">観測点を選択してください</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ホバートレーサー -->
+<div id="tsjp-hover-tip" class="tide-hover-tip"></div>
+
+<script>
+// Created: 2026-06-03 JST
+
+/* ════════════════════════════════════════════════════════════
+   定数
+════════════════════════════════════════════════════════════ */
+const _BASE        = location.origin;
+const PROXY        = _BASE + '/proxy?url=';
+const API_TSUNAMI  = _BASE + '/api/tsunami';
+const JMA_TIDE_BASE = 'https://www.jma.go.jp/bosai/tidelevel/';
+const TSUN_POLL_MS  = 60_000;
+const TIDE_POLL_MS  = 5 * 60_000;
+
+/* ════════════════════════════════════════════════════════════
+   ① 純粋ロジック：津波
+════════════════════════════════════════════════════════════ */
+const GRADE_META = {
+  MajorWarning: { label:'大津波警報', cls:'major',   icon:'🟣' },
+  Warning:      { label:'津波警報',   cls:'warning', icon:'🔴' },
+  Watch:        { label:'津波注意報', cls:'watch',   icon:'🟡' },
+  Forecast:     { label:'津波予報',   cls:'forecast', icon:'🔵' },
+  None:         { label:'津波警報等なし', cls:'none', icon:'🌊' },
+};
+
+function topGrade(areas) {
+  for (const g of ['MajorWarning','Warning','Watch','Forecast']) {
+    if (areas.some(a => a.grade === g)) return g;
+  }
+  return 'None';
+}
+
+function groupByGrade(areas) {
+  const g = { MajorWarning:[], Warning:[], Watch:[], Forecast:[], None:[] };
+  for (const a of areas) { const k = a.grade in g ? a.grade : 'None'; g[k].push(a); }
+  return g;
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString('ja-JP', {
+      timeZone:'Asia/Tokyo', month:'numeric', day:'numeric',
+      hour:'2-digit', minute:'2-digit',
+    });
+  } catch { return iso; }
+}
+
+function fmtHeight(mh)  { return mh?.description ?? mh?.value ?? '—'; }
+
+function fmtArrival(fh) {
+  if (!fh) return '—';
+  const cond = fh.condition ?? '';
+  const time = fh.arrivalTime ? fmtTime(fh.arrivalTime) : '';
+  return cond || time || '—';
+}
+
+/* ════════════════════════════════════════════════════════════
+   ① 純粋ロジック：地図スタイル
+════════════════════════════════════════════════════════════ */
+function colorByGrade(grade) {
+  switch (grade) {
+    case 'MajorWarning': return { line:'#dd66ff', lineWidth:7,  glowColor:'#cc44ff', glowWidth:14 };
+    case 'Warning':      return { line:'#ff3030', lineWidth:6,  glowColor:'#ff2020', glowWidth:12 };
+    case 'Watch':        return { line:'#ffdd00', lineWidth:5,  glowColor:'#ffcc00', glowWidth:10 };
+    case 'Forecast':     return { line:'#00ccff', lineWidth:3,  glowColor:'#00aadd', glowWidth:6  };
+    default:             return { line:'#2a3545', lineWidth:0.4, glowColor:'#000000', glowWidth:0  };
+  }
+}
+
+function findGradeByCode(code, groups) {
+  for (const g of ['MajorWarning','Warning','Watch','Forecast']) {
+    if (groups[g]?.some(a => String(a.code) === String(code))) return g;
+  }
+  return 'None';
+}
+
+function styleFeature(f, groups) {
+  const code = f.properties?.code ?? f.properties?.areaCode;
+  const s    = colorByGrade(findGradeByCode(code, groups));
+  return { ...f, properties: { ...f.properties,
+    lineColor:s.line, lineWidth:s.lineWidth,
+    glowColor:s.glowColor, glowWidth:s.glowWidth,
+  }};
+}
+
+/* ════════════════════════════════════════════════════════════
+   ① 純粋ロジック：験潮（tide_viewer から移植・簡略化）
+════════════════════════════════════════════════════════════ */
+function normName(s) { return s.replace(/[（()）\s]/g, ''); }
+function markerColor(t) { return {jcg:'#00c49a', jma:'#ffb000', phb:'#00e5ff'}[t] || '#888'; }
+function jmaCodeToRegion(code) {
+  return ({10:'北海道',11:'東北',12:'関東',13:'東海',14:'北陸',15:'近畿',
+           16:'中国',17:'四国',18:'九州',19:'南西諸島',20:'沖縄'})[String(code).slice(0,2)] || '—';
+}
+function jmaFormatDate(nowMs) {
+  const d = new Date(nowMs + 9*3600*1000);
+  return `${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,'0')}${String(d.getUTCDate()).padStart(2,'0')}`;
+}
+function filterStations(stations, q) {
+  const s = q.trim().toLowerCase();
+  if (!s) return stations;
+  return stations.filter(st => st.name.includes(s) || (st.region&&st.region.includes(s)));
+}
+function groupByRegion(stations) {
+  const m = new Map();
+  for (const s of stations) { const k = s.region||'—'; if(!m.has(k)) m.set(k,[]); m.get(k).push(s); }
+  return [...m.entries()].map(([region,items])=>({region,items}));
+}
+
+function getJcgStations() {
+  return [
+    {id:'0001',name:'稚内',region:'北海道',lat:45.40778,lon:141.68528},
+    {id:'0004',name:'網走',region:'北海道',lat:44.01944,lon:144.28583},
+    {id:'0006',name:'花咲',region:'北海道',lat:43.27806,lon:145.56778},
+    {id:'0008',name:'釧路',region:'北海道',lat:42.97556,lon:144.37139},
+    {id:'0016',name:'函館',region:'北海道',lat:41.78167,lon:140.72472},
+    {id:'0023',name:'小樽',region:'北海道',lat:43.19028,lon:141.01306},
+    {id:'0029',name:'下北',region:'東北',lat:41.36472,lon:141.23806},
+    {id:'0032',name:'深浦',region:'東北',lat:40.64722,lon:139.92639},
+    {id:'0033',name:'竜飛',region:'東北',lat:41.2425,lon:140.38139},
+    {id:'0035',name:'宮古',region:'東北',lat:39.64306,lon:141.97528},
+    {id:'0036',name:'釜石',region:'東北',lat:39.27333,lon:141.88917},
+    {id:'0037',name:'大船渡',region:'東北',lat:39.01972,lon:141.75333},
+    {id:'0038',name:'鮎川',region:'東北',lat:38.29667,lon:141.50528},
+    {id:'0042',name:'小名浜',region:'東北',lat:36.9375,lon:140.89194},
+    {id:'0052',name:'布良',region:'関東',lat:34.91889,lon:139.825},
+    {id:'0053',name:'千葉',region:'関東',lat:35.56806,lon:140.04556},
+    {id:'0054',name:'東京',region:'関東',lat:35.64861,lon:139.77},
+    {id:'0062',name:'横浜',region:'関東',lat:35.45417,lon:139.64417},
+    {id:'0063',name:'横須賀',region:'関東',lat:35.28806,lon:139.65139},
+    {id:'0065',name:'小田原',region:'関東',lat:35.23806,lon:139.14806},
+    {id:'0055',name:'岡田',region:'伊豆・小笠原',lat:34.78944,lon:139.39139},
+    {id:'0056',name:'神津島',region:'伊豆・小笠原',lat:34.20917,lon:139.13167},
+    {id:'0057',name:'三宅島(阿古)',region:'伊豆・小笠原',lat:34.06333,lon:139.48917},
+    {id:'0058',name:'三宅島坪田',region:'伊豆・小笠原',lat:34.04556,lon:139.55806},
+    {id:'0059',name:'八丈島',region:'伊豆・小笠原',lat:33.11361,lon:139.79583},
+    {id:'0060',name:'父島',region:'伊豆・小笠原',lat:27.09417,lon:142.19444},
+    {id:'0068',name:'石廊崎',region:'東海',lat:34.62833,lon:138.88917},
+    {id:'0070',name:'内浦',region:'東海',lat:35.01722,lon:138.89028},
+    {id:'0071',name:'清水港',region:'東海',lat:35.01167,lon:138.5175},
+    {id:'0073',name:'御前崎',region:'東海',lat:34.60833,lon:138.22222},
+    {id:'0074',name:'舞阪',region:'東海',lat:34.68194,lon:137.60889},
+    {id:'0075',name:'赤羽根',region:'東海',lat:34.605,lon:137.18833},
+    {id:'0079',name:'名古屋',region:'東海',lat:35.09139,lon:136.88083},
+    {id:'0081',name:'鳥羽',region:'東海',lat:34.48528,lon:136.82472},
+    {id:'0082',name:'尾鷲',region:'東海',lat:34.07639,lon:136.20722},
+    {id:'0083',name:'熊野',region:'東海',lat:33.92583,lon:136.16889},
+    {id:'0087',name:'佐渡',region:'北陸',lat:38.31861,lon:138.51722},
+    {id:'0089',name:'粟島',region:'北陸',lat:38.46778,lon:139.255},
+    {id:'0091',name:'富山',region:'北陸',lat:36.76222,lon:137.22472},
+    {id:'0095',name:'能登',region:'北陸',lat:37.50083,lon:137.15528},
+    {id:'0101',name:'和歌山',region:'近畿',lat:34.22167,lon:135.14556},
+    {id:'0103',name:'御坊',region:'近畿',lat:33.85083,lon:135.16444},
+    {id:'0104',name:'白浜',region:'近畿',lat:33.68361,lon:135.37528},
+    {id:'0105',name:'串本',region:'近畿',lat:33.47583,lon:135.77333},
+    {id:'0106',name:'浦神',region:'近畿',lat:33.55833,lon:135.89639},
+    {id:'0107',name:'大阪',region:'近畿',lat:34.65806,lon:135.43278},
+    {id:'0108',name:'淡輪',region:'近畿',lat:34.33889,lon:135.17806},
+    {id:'0109',name:'神戸',region:'近畿',lat:34.68222,lon:135.19028},
+    {id:'0111',name:'洲本',region:'近畿',lat:34.34667,lon:134.90111},
+    {id:'0113',name:'舞鶴',region:'近畿',lat:35.47667,lon:135.38694},
+    {id:'0115',name:'宇野',region:'中国',lat:34.48861,lon:133.94944},
+    {id:'0117',name:'呉',region:'中国',lat:34.24056,lon:132.55028},
+    {id:'0118',name:'広島',region:'中国',lat:34.35306,lon:132.46472},
+    {id:'0120',name:'境',region:'中国',lat:35.54778,lon:133.24306},
+    {id:'0121',name:'浜田',region:'中国',lat:34.89722,lon:132.06611},
+    {id:'0122',name:'西郷',region:'中国',lat:36.20139,lon:133.33111},
+    {id:'0136',name:'徳山',region:'中国',lat:34.04083,lon:131.80278},
+    {id:'0123',name:'高松',region:'四国',lat:34.35139,lon:134.05694},
+    {id:'0127',name:'小松島',region:'四国',lat:34.00917,lon:134.58778},
+    {id:'0128',name:'阿波由岐',region:'四国',lat:33.77111,lon:134.59222},
+    {id:'0129',name:'室戸岬',region:'四国',lat:33.26639,lon:134.16444},
+    {id:'0130',name:'高知',region:'四国',lat:33.49917,lon:133.56917},
+    {id:'0132',name:'土佐清水',region:'四国',lat:32.77917,lon:132.95889},
+    {id:'0133',name:'松山',region:'四国',lat:33.85889,lon:132.71222},
+    {id:'0134',name:'宇和島',region:'四国',lat:33.22722,lon:132.55111},
+    {id:'0149',name:'博多',region:'九州',lat:33.61889,lon:130.40778},
+    {id:'0152',name:'大浦',region:'九州',lat:32.97667,lon:130.22056},
+    {id:'0154',name:'佐世保',region:'九州',lat:33.15806,lon:129.72389},
+    {id:'0156',name:'長崎',region:'九州',lat:32.73722,lon:129.86917},
+    {id:'0157',name:'口之津',region:'九州',lat:32.60528,lon:130.19528},
+    {id:'0158',name:'厳原',region:'九州',lat:34.19361,lon:129.29694},
+    {id:'0159',name:'対馬比田勝',region:'九州',lat:34.65528,lon:129.47833},
+    {id:'0161',name:'福江',region:'九州',lat:32.69611,lon:128.84944},
+    {id:'0163',name:'大分',region:'九州',lat:33.26611,lon:131.68667},
+    {id:'0164',name:'佐伯',region:'九州',lat:32.94611,lon:131.96083},
+    {id:'0168',name:'苓北',region:'九州',lat:32.4675,lon:130.03694},
+    {id:'0171',name:'油津',region:'九州',lat:31.57694,lon:131.40944},
+    {id:'0173',name:'大泊',region:'九州',lat:31.02361,lon:130.68917},
+    {id:'0174',name:'鹿児島',region:'九州',lat:31.5925,lon:130.56472},
+    {id:'0175',name:'枕崎',region:'九州',lat:31.26778,lon:130.29306},
+    {id:'0177',name:'西之表',region:'南西諸島',lat:30.735,lon:130.99222},
+    {id:'0178',name:'種子島',region:'南西諸島',lat:30.46361,lon:130.96444},
+    {id:'0179',name:'中之島',region:'南西諸島',lat:29.84194,lon:129.84778},
+    {id:'0180',name:'名瀬',region:'南西諸島',lat:28.39917,lon:129.49778},
+    {id:'0181',name:'奄美',region:'南西諸島',lat:28.32278,lon:129.53417},
+    {id:'0184',name:'那覇',region:'南西諸島',lat:26.21333,lon:127.66528},
+    {id:'0185',name:'南大東',region:'南西諸島',lat:25.86861,lon:131.22806},
+    {id:'0187',name:'石垣',region:'南西諸島',lat:24.33222,lon:124.16361},
+    {id:'0188',name:'与那国',region:'南西諸島',lat:24.45222,lon:122.94194},
+  ];
+}
+
+function jmaExtractStations(areaJson) {
+  const list = [];
+  for (const [, region] of Object.entries(areaJson)) {
+    for (const c30 of (region.class30s || [])) {
+      for (const st of (c30.stations || [])) {
+        const h3 = parseFloat(st.detail?.height3 ?? 0);
+        list.push({
+          code: st.code, name: st.name,
+          type: st.type || 'jma', typeName: st.typeName || '気象庁',
+          lat: st.lat, lon: st.lon,
+          datumOffset: isFinite(h3) ? Math.abs(h3) : 0,
+        });
+      }
+    }
+  }
+  return list;
+}
+
+function buildMergedStations(jcgList, jmaList) {
+  const jmaByNorm = new Map();
+  for (const j of jmaList) jmaByNorm.set(normName(j.name), j);
+  const merged = [], usedJma = new Set();
+  for (const jcg of jcgList) {
+    const jma = jmaByNorm.get(normName(jcg.name));
+    merged.push({
+      id: jcg.id, jcgId: jcg.id, jmaCode: jma?.code ?? null,
+      name: jcg.name, region: jcg.region,
+      type: jma?.type ?? 'jcg', typeName: jma ? jma.typeName : '海上保安庁',
+      lat: jma?.lat ?? null, lon: jma?.lon ?? null,
+      datumOffset: jma?.datumOffset ?? 0,
+    });
+    if (jma) usedJma.add(jma.code);
+  }
+  for (const jma of jmaList) {
+    if (usedJma.has(jma.code)) continue;
+    merged.push({
+      id: jma.code, jcgId: null, jmaCode: jma.code,
+      name: jma.name, region: jmaCodeToRegion(jma.code),
+      type: jma.type, typeName: jma.typeName,
+      lat: jma.lat, lon: jma.lon, datumOffset: jma.datumOffset,
+    });
+  }
+  return merged;
+}
+
+/* ════════════════════════════════════════════════════════════
+   ① 純粋ロジック：験潮データ取得・変換
+════════════════════════════════════════════════════════════ */
+async function jcgFetch(stationId) {
+  const r = await fetch(`${_BASE}/api/tide/jcg?station=${stationId}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+function jcgParseSlice(d) {
+  const nowJst = new Date(Date.now() + 9*3600*1000);
+  nowJst.setUTCHours(0,0,0,0);
+  return { values: d.data.map(p => p.value), intervalMs: d.interval*60*1000, startMs: nowJst.getTime()-9*3600*1000 };
+}
+
+async function jmaProxyFetch(path) {
+  const r = await fetch(PROXY + encodeURIComponent(JMA_TIDE_BASE + path));
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+function jmaSliceToday(obs) {
+  const dayCount   = Math.round(24*60*60 / obs.interval);
+  const intervalMs = obs.interval * 1000;
+  const toArr = raw => Array.from({length: dayCount}, (_, i) => {
+    const v = (raw || [])[i];
+    return (v != null && isFinite(v)) ? v : null;
+  });
+  return {
+    tide:      toArr(obs.tide),
+    departure: toArr(obs.departure),
+    startMs:   new Date(obs.time).getTime(),
+    intervalMs, count: dayCount,
+  };
+}
+
+/* ════════════════════════════════════════════════════════════
+   ② 描画：グラフ（tide_viewer から移植）
+════════════════════════════════════════════════════════════ */
+const _hoverState = new Map();
+
+function drawTideGraph(canvas, values, nowMs, startMs, intervalMs, lineColor, hoverIdx = null) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (!W || !H) return;
+  canvas.width = W*dpr; canvas.height = H*dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const pad = {top:14, bottom:26, left:46, right:12};
+  const pw  = W - pad.left - pad.right;
+  const ph  = H - pad.top  - pad.bottom;
+  const n   = values.length;
+
+  const cs    = getComputedStyle(document.documentElement);
+  const cv    = k => cs.getPropertyValue(k).trim() || undefined;
+  const cSurf = cv('--surface')  || '#12121e';
+  const cBord = cv('--border')   || '#2a2a3a';
+  const cBord2= cv('--border2')  || '#333';
+  const cDim  = cv('--text-dim') || '#666';
+  const cRed  = cv('--red')      || '#ff4444';
+  const cMono = cv('--mono')     || 'monospace';
+
+  const valid = values.filter(v => v != null && isFinite(v));
+  if (!valid.length) { ctx.clearRect(0,0,W,H); return; }
+  const rawMin = Math.min(...valid), rawMax = Math.max(...valid);
+  const span   = Math.max(rawMax - rawMin, 8);
+  const mg     = span * 0.14;
+  const yMin = rawMin - mg, yMax = rawMax + mg;
+
+  const xOf = i => pad.left + (i / Math.max(n-1,1)) * pw;
+  const yOf = v => pad.top  + ph * (1 - (v - yMin) / (yMax - yMin));
+
+  ctx.fillStyle = cSurf; ctx.fillRect(0,0,W,H);
+
+  const zy = yOf(0);
+  if (zy >= pad.top && zy <= pad.top+ph) {
+    ctx.save(); ctx.strokeStyle=cBord2; ctx.setLineDash([4,6]); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(pad.left,zy); ctx.lineTo(pad.left+pw,zy); ctx.stroke(); ctx.restore();
+  }
+
+  ctx.font = `9px ${cMono}`; ctx.textAlign = 'center';
+  for (let h = 0; h <= 24; h += 6) {
+    const idx = h*3600/(intervalMs/1000);
+    const x   = xOf(idx);
+    ctx.strokeStyle=cBord; ctx.setLineDash([]); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x,pad.top); ctx.lineTo(x,pad.top+ph); ctx.stroke();
+    ctx.fillStyle=cDim; ctx.fillText(`${String(h).padStart(2,'0')}:00`, x, H-6);
+  }
+
+  const ySpan = yMax - yMin;
+  const step  = ySpan>80?20:ySpan>40?10:ySpan>20?5:2;
+  ctx.textAlign='right';
+  for (let v = Math.ceil(yMin/step)*step; v <= yMax+step*0.5; v += step) {
+    const y = yOf(v);
+    if (y < pad.top-1 || y > pad.top+ph+1) continue;
+    ctx.fillStyle=cDim; ctx.font=`9px ${cMono}`; ctx.fillText(`${v}`, pad.left-4, y+3);
+    ctx.save(); ctx.strokeStyle=cBord; ctx.lineWidth=0.5; ctx.setLineDash([2,5]);
+    ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(pad.left+pw,y); ctx.stroke(); ctx.restore();
+  }
+
+  ctx.save(); ctx.strokeStyle=lineColor; ctx.lineWidth=2;
+  ctx.lineJoin='round'; ctx.setLineDash([]);
+  let pen = false; ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const v = values[i];
+    if (v == null || !isFinite(v)) { pen=false; continue; }
+    const x=xOf(i), y=yOf(v);
+    if (!pen) { ctx.moveTo(x,y); pen=true; } else ctx.lineTo(x,y);
+  }
+  ctx.stroke(); ctx.restore();
+
+  const curIdx = (nowMs - startMs) / intervalMs;
+  if (curIdx >= 0 && curIdx <= n) {
+    const x  = xOf(curIdx);
+    const ci = Math.min(Math.floor(curIdx), n-1);
+    const cv2= values[ci];
+    ctx.save(); ctx.strokeStyle=cRed; ctx.lineWidth=1.5; ctx.setLineDash([3,4]);
+    ctx.beginPath(); ctx.moveTo(x,pad.top); ctx.lineTo(x,pad.top+ph); ctx.stroke();
+    if (cv2 != null && isFinite(cv2)) {
+      const cy = yOf(cv2);
+      ctx.fillStyle=cRed; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(x,cy,4,0,Math.PI*2); ctx.fill();
+      const label=`${cv2}cm`;
+      ctx.font=`bold 10px ${cMono}`; ctx.textAlign='left';
+      const tw=ctx.measureText(label).width;
+      const bx=Math.min(x+8,pad.left+pw-tw-6), by=Math.max(cy-16,pad.top+12);
+      ctx.fillStyle=cSurf; ctx.fillRect(bx-3,by-10,tw+10,14);
+      ctx.fillStyle=cRed; ctx.fillText(label,bx+2,by);
+    }
+    ctx.restore();
+  }
+
+  if (hoverIdx !== null && isFinite(hoverIdx)) {
+    const hi = Math.max(0, Math.min(n-1, Math.round(hoverIdx)));
+    const hv = values[hi];
+    const hx = xOf(hoverIdx);
+    ctx.save(); ctx.strokeStyle='rgba(255,255,255,0.4)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(hx,pad.top); ctx.lineTo(hx,pad.top+ph); ctx.stroke();
+    if (hv != null && isFinite(hv)) {
+      const hy = yOf(hv);
+      ctx.beginPath(); ctx.moveTo(pad.left,hy); ctx.lineTo(pad.left+pw,hy); ctx.stroke();
+      ctx.restore();
+      ctx.save(); ctx.fillStyle='#fff'; ctx.strokeStyle=lineColor; ctx.lineWidth=2; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(hx,hy,4,0,Math.PI*2); ctx.fill(); ctx.stroke(); ctx.restore();
+    } else { ctx.restore(); }
+  }
+}
+
+function attachGraphHover(canvas, tipEl, getSlice) {
+  canvas.style.cursor = 'crosshair';
+  canvas.addEventListener('mousemove', e => {
+    const slice = getSlice();
+    if (!slice || !slice.values.length) {
+      _hoverState.delete(canvas); tipEl.style.display='none'; return;
+    }
+    const rect  = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const pad = {left:46, right:12};
+    if (mouseX < pad.left || mouseX > rect.width - pad.right) {
+      _hoverState.delete(canvas); tipEl.style.display='none'; return;
+    }
+    const n       = slice.values.length;
+    const fracIdx = ((mouseX - pad.left) / (rect.width - pad.left - pad.right)) * (n-1);
+    const idx     = Math.max(0, Math.min(n-1, Math.round(fracIdx)));
+    const val     = slice.values[idx];
+    _hoverState.set(canvas, fracIdx);
+    const timeMs  = slice.startMs + idx * slice.intervalMs;
+    const d       = new Date(timeMs + 9*3600*1000);
+    const hh=String(d.getUTCHours()).padStart(2,'0'), mm=String(d.getUTCMinutes()).padStart(2,'0');
+    const ss=String(d.getUTCSeconds()).padStart(2,'0');
+    const timeStr = slice.intervalMs < 60000 ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`;
+    if (val != null && isFinite(val)) {
+      tipEl.innerHTML = `<span class="tip-time">${timeStr}</span><br><span class="tip-value">${val>0?'+':''}${val} cm</span>`;
+      tipEl.style.display = 'block';
+      const tw=tipEl.offsetWidth, th=tipEl.offsetHeight;
+      tipEl.style.left = Math.min(e.clientX+14, window.innerWidth-tw-6) + 'px';
+      tipEl.style.top  = Math.max(e.clientY-th-10, 6) + 'px';
+    } else { tipEl.style.display='none'; }
+  });
+  canvas.addEventListener('mouseleave', () => {
+    _hoverState.delete(canvas); tipEl.style.display='none';
+  });
+}
+
+/* ════════════════════════════════════════════════════════════
+   ② 描画：津波情報パネル
+════════════════════════════════════════════════════════════ */
+function renderWarnBanner(els, grade, rdt) {
+  const meta = GRADE_META[grade] ?? GRADE_META.None;
+  const banner = els.warnBanner;
+  ['none','watch','warning','major','forecast'].forEach(c => banner.classList.remove(`tsjp-warn-banner--${c}`));
+  banner.classList.add(`tsjp-warn-banner--${meta.cls}`);
+  els.warnIcon.textContent  = meta.icon;
+  els.warnLevel.textContent = meta.label;
+  els.warnSub.textContent   = rdt ? `発表: ${fmtTime(rdt)}` : '現在、発表なし';
+}
+
+function renderAreaList(el, groups) {
+  const hasWarn = ['MajorWarning','Warning','Watch','Forecast'].some(g => groups[g]?.length > 0);
+  if (!hasWarn) {
+    el.innerHTML = '<div class="tsjp-no-warn">現在、津波警報等は発表されていません。</div>';
+    return;
+  }
+  let html = '';
+  for (const grade of ['MajorWarning','Warning','Watch','Forecast']) {
+    const areas = groups[grade];
+    if (!areas?.length) continue;
+    const meta = GRADE_META[grade];
+    html += `<div class="tsjp-grade-hdr">
+      <span class="tsjp-grade-dot tsjp-grade-dot--${meta.cls}"></span>
+      ${meta.label}（${areas.length}区域）
+    </div>`;
+    for (const a of areas) {
+      html += `<div class="tsjp-area-row">
+        <span class="tsjp-area-name">${a.name ?? a.code}</span>
+        <span class="tsjp-area-height">${fmtHeight(a.maxHeight)}</span>
+        <span class="tsjp-area-arrival">${fmtArrival(a.firstHeight)}</span>
+      </div>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+/* ════════════════════════════════════════════════════════════
+   ② 描画：験潮ドロワー
+════════════════════════════════════════════════════════════ */
+function renderDrawerList(listEl, stations, query, selectedId, onSelect) {
+  const filtered = filterStations(stations, query);
+  const groups   = groupByRegion(filtered);
+  let html = '';
+  if (!filtered.length) {
+    html = '<div class="tsjp-drawer-region">該当なし</div>';
+  } else {
+    for (const {region, items} of groups) {
+      html += `<div class="tsjp-drawer-region">${region}</div>`;
+      for (const st of items) {
+        const sel = st.id === selectedId ? ' tsjp-drawer-item--selected' : '';
+        const src = st.jcgId ? '海保' : '気象';
+        html += `<div class="tsjp-drawer-item${sel}" data-id="${st.id}">
+          <span>${st.name}</span><span style="color:var(--text-mid);font-size:9px;">${src}</span>
+        </div>`;
+      }
+    }
+  }
+  listEl.innerHTML = html;
+  listEl.querySelectorAll('.tsjp-drawer-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const st = stations.find(s => s.id === el.dataset.id);
+      if (st) onSelect(st);
+    });
+  });
+}
+
+/* ════════════════════════════════════════════════════════════
+   ③ 地図：初期化
+════════════════════════════════════════════════════════════ */
+const GSI_PALE_STYLE = {
+  version:8,
+  sources: { gsi: { type:'raster',
+    tiles:['https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png'],
+    tileSize:256, attribution:'©国土地理院' }},
+  layers: [{ id:'gsi', type:'raster', source:'gsi' }],
+};
+
+function initMap(mapEl) {
+  return new maplibregl.Map({
+    container: mapEl, style: GSI_PALE_STYLE,
+    center: [136.5, 36.5], zoom: 5,
+  });
+}
+
+async function addTsunamiLayer(map, geojsonDataRef) {
+  try {
+    const r = await fetch(_BASE + '/api/tsunami/areas.geojson');
+    if (!r.ok) throw new Error();
+    const geojson = await r.json();
+    const ns = colorByGrade('None');
+    const features = (geojson.features || []).map(f => ({
+      ...f,
+      properties: { ...f.properties,
+        _name: f.properties?.name ?? '',
+        lineColor: ns.line, lineWidth: ns.lineWidth,
+        glowColor: ns.glowColor, glowWidth: ns.glowWidth,
+      },
+    }));
+    const data = { type:'FeatureCollection', features };
+    geojsonDataRef.current = data;
+
+    function addLayers() {
+      map.addSource('tsun-areas', { type:'geojson', data });
+      map.addLayer({ id:'tsun-glow', type:'line', source:'tsun-areas',
+        paint: { 'line-color':['get','glowColor'], 'line-width':['get','glowWidth'], 'line-opacity':0.3, 'line-blur':4 }});
+      map.addLayer({ id:'tsun-line', type:'line', source:'tsun-areas',
+        paint: { 'line-color':['get','lineColor'], 'line-width':['get','lineWidth'], 'line-opacity':0.95 }});
+
+      let popup = null;
+      map.on('mousemove', 'tsun-line', e => {
+        if (!e.features?.length) return;
+        map.getCanvas().style.cursor = 'default';
+        const name = e.features[0].properties?._name;
+        if (!name) return;
+        if (!popup) popup = new maplibregl.Popup({closeButton:false,className:'tsun-map-popup',offset:8});
+        popup.setLngLat(e.lngLat).setHTML(`<span class="tsun-tooltip">${name}</span>`).addTo(map);
+      });
+      map.on('mouseleave','tsun-line',()=>{ if(popup){popup.remove();popup=null;} });
+    }
+    function addLayersAndFixOrder() {
+      addLayers();
+      if (map.getLayer('tide-stations')) {
+        try { map.moveLayer('tide-stations'); } catch(_){}
+      }
+    }
+    map.loaded() ? addLayersAndFixOrder() : map.on('load', addLayersAndFixOrder);
+  } catch(e) { console.warn('tsunami_area.geojson load failed:', e); }
+}
+
+function addStationLayer(map, stations, onSelect) {
+  const stWithCoord = stations.filter(s => s.lat && s.lon);
+  function doAdd() {
+    map.addSource('tide-stations', {
+      type:'geojson',
+      data:{ type:'FeatureCollection', features: stWithCoord.map(s => ({
+        type:'Feature', id:s.id,
+        geometry:{ type:'Point', coordinates:[s.lon,s.lat] },
+        properties:{ id:s.id, name:s.name, color:markerColor(s.type) },
+      }))},
+      promoteId:'id',
+    });
+    map.addLayer({ id:'tide-stations', type:'circle', source:'tide-stations',
+      paint:{
+        'circle-radius': ['case',['boolean',['feature-state','selected'],false],8,4],
+        'circle-color': ['get','color'],
+        'circle-opacity': 0.85,
+        'circle-stroke-color': ['case',['boolean',['feature-state','selected'],false],'#fff','transparent'],
+        'circle-stroke-width': ['case',['boolean',['feature-state','selected'],false],2,0],
+      }
+    });
+
+    let prevId = null;
+    let stPopup = null;
+
+    map.on('click','tide-stations', e => {
+      if (!e.features?.length) return;
+      const id = e.features[0].properties.id;
+      const st = stWithCoord.find(s => s.id === id);
+      if (st) onSelect(st);
+    });
+    map.on('mouseenter','tide-stations', e => {
+      map.getCanvas().style.cursor = 'pointer';
+      if (e.features?.length) {
+        const p = e.features[0].properties;
+        if (!stPopup) stPopup = new maplibregl.Popup({closeButton:false,offset:8});
+        stPopup.setLngLat(e.lngLat)
+          .setHTML(`<div style="font:11px var(--mono,monospace);color:#e0e8f0;padding:2px 6px;">${p.name}</div>`)
+          .addTo(map);
+      }
+    });
+    map.on('mouseleave','tide-stations',()=>{ map.getCanvas().style.cursor=''; if(stPopup){stPopup.remove();stPopup=null;} });
+
+    // 選択状態を更新する関数を返す
+    return (selectedId) => {
+      if (prevId) { try { map.setFeatureState({source:'tide-stations',id:prevId},{selected:false}); } catch(_){} }
+      if (selectedId) { try { map.setFeatureState({source:'tide-stations',id:selectedId},{selected:true}); } catch(_){} }
+      prevId = selectedId;
+      if (selectedId) {
+        const st = stWithCoord.find(s => s.id === selectedId);
+        if (st) map.flyTo({ center:[st.lon,st.lat], zoom:Math.max(map.getZoom(),6) });
+      }
+    };
+  }
+  if (map.loaded()) return doAdd();
+  return new Promise(res => map.on('load', () => res(doAdd())));
+}
+
+function updateTsunamiMap(map, geojsonDataRef, groups) {
+  if (!map || !geojsonDataRef.current) return;
+  const features = (geojsonDataRef.current.features || []).map(f => styleFeature(f, groups));
+  const src = map.getSource('tsun-areas');
+  if (src) src.setData({ type:'FeatureCollection', features });
+}
+
+/* ════════════════════════════════════════════════════════════
+   ③ アプリ状態・初期化
+════════════════════════════════════════════════════════════ */
+function collectEls() {
+  const $ = id => document.getElementById(id);
+  return {
+    clock:       $('tsjp-clock'),
+    warnBanner:  $('tsjp-warn-banner'),
+    warnIcon:    $('tsjp-warn-icon'),
+    warnLevel:   $('tsjp-warn-level'),
+    warnSub:     $('tsjp-warn-sub'),
+    warnUpdated: $('tsjp-warn-updated'),
+    areaList:    $('tsjp-area-list'),
+    stationBtn:  $('tsjp-station-btn'),
+    srcJcg:      $('tsjp-src-jcg'),
+    srcJma:      $('tsjp-src-jma'),
+    srcDep:      $('tsjp-src-dep'),
+    drawer:      $('tsjp-drawer'),
+    drawerSearch:$('tsjp-drawer-search'),
+    drawerList:  $('tsjp-drawer-list'),
+    sectionJcg:  $('tsjp-section-jcg'),
+    canvasJcg:   $('tsjp-canvas-jcg'),
+    errJcg:      $('tsjp-err-jcg'),
+    sectionJma:  $('tsjp-section-jma'),
+    canvasJma:   $('tsjp-canvas-jma'),
+    errJma:      $('tsjp-err-jma'),
+    sectionDep:  $('tsjp-section-dep'),
+    canvasDep:   $('tsjp-canvas-dep'),
+    errDep:      $('tsjp-err-dep'),
+    graphEmpty:  $('tsjp-graph-empty'),
+    hoverTip:    $('tsjp-hover-tip'),
+  };
+}
+
+async function init() {
+  const els = collectEls();
+
+  // 時計
+  setInterval(() => {
+    els.clock.textContent = new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
+  }, 1000);
+
+  // タブ切り替え
+  document.querySelectorAll('.tsjp-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tsjp-tab').forEach(b => b.classList.remove('tsjp-tab--active'));
+      document.querySelectorAll('.tsjp-pane').forEach(p => p.classList.remove('tsjp-pane--active'));
+      btn.classList.add('tsjp-tab--active');
+      document.getElementById(`tsjp-pane-${btn.dataset.tab}`)?.classList.add('tsjp-pane--active');
+    });
+  });
+
+  // アプリ状態
+  const state = {
+    stations:    getJcgStations().map(j => ({...j, jcgId:j.id, jmaCode:null, type:'jcg', typeName:'海上保安庁', lat:j.lat, lon:j.lon, datumOffset:0})),
+    selectedId:  null,
+    query:       '',
+    showJcg:     true,
+    showJma:     true,
+    showDep:     true,
+    jcgSlice:    null,
+    jmaSliced:   null,
+    jcgUpdatedMs:0,
+    jmaUpdatedMs:0,
+    tideRefreshMs: TIDE_POLL_MS,
+    geojsonDataRef: { current: null },
+    updateMapSelection: null,
+    map: null,
+  };
+
+  // ── 地図初期化 ───────────────────────────────────────────
+  const mapEl = document.getElementById('tsjp-map');
+  state.map   = initMap(mapEl);
+
+  // 津波GeoJSON レイヤー（非同期 → 完了後に初回ポーリング）
+  addTsunamiLayer(state.map, state.geojsonDataRef).then(() => {
+    pollTsunami();
+    setInterval(pollTsunami, TSUN_POLL_MS);
+  });
+
+  // 観測点レイヤー管理
+  let stationLayerReady = false;
+
+  function updateStationLayer() {
+    const stWithCoord = state.stations.filter(s => s.lat && s.lon);
+    if (!stWithCoord.length) return;
+
+    if (!stationLayerReady) {
+      stationLayerReady = true;
+      const result = addStationLayer(state.map, state.stations, st => onStationSelected(st));
+      if (result instanceof Promise) {
+        result.then(fn => { state.updateMapSelection = fn; });
+      } else {
+        state.updateMapSelection = result;
+      }
+    } else {
+      // レイヤー既存 → データソースを更新
+      const src = state.map.getSource('tide-stations');
+      if (src) {
+        src.setData({ type:'FeatureCollection', features: stWithCoord.map(s => ({
+          type:'Feature', id:s.id,
+          geometry:{ type:'Point', coordinates:[s.lon, s.lat] },
+          properties:{ id:s.id, name:s.name, color:markerColor(s.type) },
+        }))});
+      }
+    }
+  }
+
+  // ── JMA 観測点マージ（バックグラウンド） ─────────────────
+  (async () => {
+    try {
+      const areaJson  = await jmaProxyFetch('const/tide_area.json');
+      const jmaList   = jmaExtractStations(areaJson);
+      const jcgBase   = getJcgStations();
+      state.stations  = buildMergedStations(jcgBase, jmaList);
+    } catch { /* JCGのみで継続 */ }
+    renderDrawerList(els.drawerList, state.stations, state.query, state.selectedId, onStationSelected);
+    updateStationLayer();
+  })();
+
+  // 初期ドロワーリスト＋レイヤー追加（座標ハードコード済みなので即座に表示）
+  renderDrawerList(els.drawerList, state.stations, state.query, state.selectedId, onStationSelected);
+  updateStationLayer();
+
+  // ── 験潮：ドロワー開閉 ───────────────────────────────────
+  els.stationBtn.addEventListener('click', () => {
+    const open = els.drawer.classList.toggle('tsjp-drawer--open');
+    if (open) { els.drawerSearch.focus(); renderDrawerList(els.drawerList, state.stations, state.query, state.selectedId, onStationSelected); }
+  });
+
+  els.drawerSearch.addEventListener('input', e => {
+    state.query = e.target.value;
+    renderDrawerList(els.drawerList, state.stations, state.query, state.selectedId, onStationSelected);
+  });
+
+  // ── 験潮：3段グラフ再描画 ─────────────────────────────────
+  function redrawTideGraphs() {
+    const cs    = getComputedStyle(document.documentElement);
+    const cTeal = cs.getPropertyValue('--teal').trim()  || '#00c49a';
+    const cCyan = cs.getPropertyValue('--cyan').trim()  || '#00e5ff';
+    const cAmb  = cs.getPropertyValue('--amber').trim() || '#ffb000';
+    const nowMs = Date.now();
+
+    if (!state.selectedId) {
+      els.sectionJcg.style.display = 'none';
+      els.sectionJma.style.display = 'none';
+      els.sectionDep.style.display = 'none';
+      els.graphEmpty.style.display = 'flex';
+      return;
+    }
+    els.graphEmpty.style.display = 'none';
+
+    // JCG（海保 5分値）
+    const hasJcg = state.jcgSlice && state.showJcg;
+    if (hasJcg) {
+      const obs = state.jcgSlice.values.filter(v => v != null && isFinite(v));
+      els.sectionJcg.style.display = 'flex';
+      if (obs.length) {
+        els.canvasJcg.style.display = 'block';
+        els.errJcg.style.display    = 'none';
+        drawTideGraph(els.canvasJcg, state.jcgSlice.values, nowMs, state.jcgSlice.startMs, state.jcgSlice.intervalMs, cTeal,
+                      _hoverState.get(els.canvasJcg) ?? null);
+      } else {
+        els.canvasJcg.style.display = 'none';
+        els.errJcg.style.display    = 'block';
+      }
+    } else {
+      els.sectionJcg.style.display = 'none';
+    }
+
+    // JMA潮位（15秒値）
+    const hasJma = state.jmaSliced && state.showJma;
+    if (hasJma) {
+      const obs = state.jmaSliced.tide.filter(v => v != null && isFinite(v));
+      els.sectionJma.style.display = 'flex';
+      if (obs.length) {
+        els.canvasJma.style.display = 'block';
+        els.errJma.style.display    = 'none';
+        drawTideGraph(els.canvasJma, state.jmaSliced.tide, nowMs, state.jmaSliced.startMs, state.jmaSliced.intervalMs, cCyan,
+                      _hoverState.get(els.canvasJma) ?? null);
+      } else {
+        els.canvasJma.style.display = 'none';
+        els.errJma.style.display    = 'block';
+      }
+    } else {
+      els.sectionJma.style.display = 'none';
+    }
+
+    // JMA偏差（観測値 − 天文潮位）
+    const hasDep = state.jmaSliced && state.showDep;
+    if (hasDep) {
+      const depObs = state.jmaSliced.departure.filter(v => v != null && isFinite(v));
+      els.sectionDep.style.display = 'flex';
+      if (depObs.length) {
+        els.canvasDep.style.display = 'block';
+        els.errDep.style.display    = 'none';
+        drawTideGraph(els.canvasDep, state.jmaSliced.departure, nowMs, state.jmaSliced.startMs, state.jmaSliced.intervalMs, cAmb,
+                      _hoverState.get(els.canvasDep) ?? null);
+      } else {
+        els.canvasDep.style.display = 'none';
+        els.errDep.style.display    = 'block';
+      }
+    } else {
+      els.sectionDep.style.display = 'none';
+    }
+  }
+
+  attachGraphHover(els.canvasJcg, els.hoverTip, () => state.jcgSlice ? { values: state.jcgSlice.values, startMs: state.jcgSlice.startMs, intervalMs: state.jcgSlice.intervalMs } : null);
+  attachGraphHover(els.canvasJma, els.hoverTip, () => state.jmaSliced ? { values: state.jmaSliced.tide, startMs: state.jmaSliced.startMs, intervalMs: state.jmaSliced.intervalMs } : null);
+  attachGraphHover(els.canvasDep, els.hoverTip, () => state.jmaSliced ? { values: state.jmaSliced.departure, startMs: state.jmaSliced.startMs, intervalMs: state.jmaSliced.intervalMs } : null);
+  window.addEventListener('resize', redrawTideGraphs);
+
+  function updateSrcButtons() {
+    els.srcJcg.classList.toggle('tsjp-src-btn--active', state.showJcg && !!state.jcgSlice);
+    els.srcJma.classList.toggle('tsjp-src-btn--active', state.showJma && !!state.jmaSliced);
+    els.srcDep.classList.toggle('tsjp-src-btn--active', state.showDep && !!state.jmaSliced);
+    els.srcJcg.classList.toggle('tsjp-src-btn--disabled', !state.jcgSlice);
+    els.srcJma.classList.toggle('tsjp-src-btn--disabled', !state.jmaSliced);
+    els.srcDep.classList.toggle('tsjp-src-btn--disabled', !state.jmaSliced);
+  }
+
+  els.srcJcg.addEventListener('click', () => {
+    if (!state.jcgSlice) return;
+    state.showJcg = !state.showJcg;
+    updateSrcButtons();
+    redrawTideGraphs();
+  });
+  els.srcJma.addEventListener('click', () => {
+    if (!state.jmaSliced) return;
+    state.showJma = !state.showJma;
+    updateSrcButtons();
+    redrawTideGraphs();
+  });
+  els.srcDep.addEventListener('click', () => {
+    if (!state.jmaSliced) return;
+    state.showDep = !state.showDep;
+    updateSrcButtons();
+    redrawTideGraphs();
+  });
+
+  // ── 観測点選択 ───────────────────────────────────────────
+  async function onStationSelected(st) {
+    state.selectedId   = st.id;
+    state.jcgSlice     = null;
+    state.jmaSliced    = null;
+    state.jcgUpdatedMs = 0;
+    state.jmaUpdatedMs = 0;
+    state.showJcg      = true;
+    state.showJma      = true;
+    state.showDep      = true;
+
+    els.stationBtn.textContent = st.name;
+    els.drawer.classList.remove('tsjp-drawer--open');
+    renderDrawerList(els.drawerList, state.stations, state.query, state.selectedId, onStationSelected);
+
+    if (state.updateMapSelection) state.updateMapSelection(st.id);
+
+    redrawTideGraphs();
+
+    const tasks = [];
+    if (st.jcgId) tasks.push(
+      jcgFetch(st.jcgId).then(d => {
+        state.jcgSlice     = jcgParseSlice(d);
+        state.jcgUpdatedMs = Date.now();
+        redrawTideGraphs();
+        updateSrcButtons();
+      }).catch(() => {})
+    );
+    if (st.jmaCode) tasks.push(
+      jmaProxyFetch(`data/tide/tide_obs_${jmaFormatDate(Date.now())}_${st.jmaCode}.json`)
+        .then(d => {
+          state.jmaSliced    = jmaSliceToday(d);
+          state.jmaUpdatedMs = Date.now();
+          redrawTideGraphs();
+          updateSrcButtons();
+        }).catch(() => {})
+    );
+    await Promise.allSettled(tasks);
+  }
+
+  // ── 津波ポーリング ───────────────────────────────────────
+  async function pollTsunami() {
+    try {
+      const res = await fetch(API_TSUNAMI);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      const areas = (data.infoType !== '解除' && data.infoType !== '取消') ? (data.areas ?? []) : [];
+      const grade  = topGrade(areas);
+      const groups = groupByGrade(areas);
+
+      renderWarnBanner(els, grade, data.rdt);
+      renderAreaList(els.areaList, groups);
+      updateTsunamiMap(state.map, state.geojsonDataRef, groups);
+      els.warnUpdated.textContent = `更新: ${new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'})}`;
+    } catch (e) {
+      els.warnLevel.textContent = 'データ取得エラー';
+      els.warnSub.textContent   = String(e.message).slice(0,60);
+    }
+  }
+
+  // ── 験潮タイマー（5分ごとに再フェッチ、毎秒再描画） ──────
+  setInterval(() => {
+    redrawTideGraphs();
+    const nowMs = Date.now();
+    const st    = state.stations.find(s => s.id === state.selectedId);
+    if (!st) return;
+    if (st.jcgId   && state.jcgUpdatedMs && nowMs - state.jcgUpdatedMs >= state.tideRefreshMs)
+      jcgFetch(st.jcgId).then(d => { state.jcgSlice=jcgParseSlice(d); state.jcgUpdatedMs=Date.now(); }).catch(()=>{});
+    if (st.jmaCode && state.jmaUpdatedMs && nowMs - state.jmaUpdatedMs >= state.tideRefreshMs)
+      jmaProxyFetch(`data/tide/tide_obs_${jmaFormatDate(nowMs)}_${st.jmaCode}.json`)
+        .then(d => { state.jmaSliced=jmaSliceToday(d); state.jmaUpdatedMs=Date.now(); }).catch(()=>{});
+  }, 1000);
+
+  // ポーリングは addTsunamiLayer 完了後に開始（上記 .then() 内）
+}
+
+document.addEventListener('DOMContentLoaded', init);
+
+/* ═══ 統合ガイド ═══════════════════════════════════════════════
+  地図   : GSI淡色ベース ＋ 津波予報区ポリゴン ＋ 験潮点マーカー
+  上パネル: 気象庁津波情報タブ（/api/tsunami、60秒ポーリング）
+           津波発生予測タブ（WIP）
+  下パネル: 験潮データ（JCG 5分値・JMA 15秒値、5分更新）
+  データ  : プロキシ経由（localhost:8765）
+════════════════════════════════════════════════════════════ */
+</script>
+</body>
+</html>

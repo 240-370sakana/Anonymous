@@ -1,0 +1,3104 @@
+<!-- Created: 2026-05-10 JST -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>地震データ可視化ダッシュボード</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Share+Tech+Mono&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
+<!-- MapLibre GL JS -->
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<!-- Chart.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!-- PapaParse -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<link rel="stylesheet" href="../css/quakeview.css">
+<body class="viz-page">
+
+<!-- ── Header ── -->
+<header>
+  <div class="logo">
+    <a class="logo-link" href="../index.html"><span class="q">Q</span><span class="uake">uake</span><span class="v">V</span><span class="iew">iew</span></a>
+    <span class="logo-sep">|</span>
+    <span class="logo-sub">SEISMIC<span>/</span>VIZ</span>
+  </div>
+  <div id="stats-bar">
+    <div class="stat"><span class="stat-label">DATE RANGE</span><span class="stat-value stat-value--sm" id="h-range">—</span></div>
+    <div class="stat"><span class="stat-label">MAX MAG</span><span class="stat-value" id="h-maxmag">—</span></div>
+    <div class="stat"><span class="stat-label">LAT RANGE</span><span class="stat-value stat-value--sm" id="h-lat">—</span></div>
+    <div class="stat"><span class="stat-label">LONG RANGE</span><span class="stat-value stat-value--sm" id="h-lon">—</span></div>
+    <div class="stat"><span class="stat-label">EVENTS</span><span class="stat-value" id="h-total">—</span></div>
+  </div>
+  <div id="header-tabs">
+    <button class="header-tab-btn active" onclick="switchTab('viz')">可視化</button>
+    <button class="header-tab-btn" onclick="switchTab('etas')">ETAS解析</button>
+  </div>
+  <button id="reload-btn">⟳ データ再読込</button>
+</header>
+
+<!-- ── Upload ── -->
+<section id="upload-section">
+
+  <!-- DB クエリパネル -->
+  <div class="panel" style="max-width:720px;width:100%;margin-bottom:20px">
+    <div class="panel-header">
+      <div class="panel-dot"></div>
+      <span class="panel-title">DB からデータ取得</span>
+      <span id="viz-db-status-text" style="margin-left:auto;font-family:var(--mono);font-size:0.68rem;color:var(--text-dim)">接続確認中...</span>
+      <span id="viz-db-status-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-dim);margin-left:8px;flex-shrink:0"></span>
+    </div>
+    <div class="panel-body">
+
+      <!-- テーブル・列 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="filter-group" style="grid-column:1/2">
+          <span class="filter-label">テーブル A <span style="color:var(--accent2)">*</span></span>
+          <select id="viz-table" onchange="onVizTableChange()">
+            <option value="">— DB未接続 —</option>
+          </select>
+        </div>
+        <div class="filter-group" style="grid-column:2/3">
+          <span class="filter-label">テーブル B <span style="color:var(--accent2)">*</span></span>
+          <select id="viz-table2">
+            <option value="">— DB未接続 —</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">日時列 *</span>
+          <select id="viz-col-dt"><option value="">—</option></select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">M列 *</span>
+          <select id="viz-col-mag"><option value="">—</option></select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">緯度列 *</span>
+          <select id="viz-col-lat"><option value="">—</option></select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">経度列 *</span>
+          <select id="viz-col-lon"><option value="">—</option></select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">深さ列 *</span>
+          <select id="viz-col-dep"><option value="">—</option></select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">震源地列</span>
+          <select id="viz-col-place"><option value="">（省略可）</option></select>
+        </div>
+      </div>
+
+      <!-- 期間 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="filter-group">
+          <span class="filter-label">開始日</span>
+          <input type="date" id="viz-date-from">
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">終了日</span>
+          <input type="date" id="viz-date-to">
+        </div>
+      </div>
+
+      <!-- 空間フィルタ（折りたたみ） -->
+      <details style="margin-bottom:14px">
+        <summary style="font-family:var(--mono);font-size:0.68rem;color:var(--text-dim);cursor:pointer;letter-spacing:1px;text-transform:uppercase;padding:4px 0">▸ 空間フィルタ（任意）</summary>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-top:10px">
+          <div class="filter-group"><span class="filter-label">緯度 最小</span><input type="number" id="viz-lat-min" step="0.1" placeholder="例: 30.0"></div>
+          <div class="filter-group"><span class="filter-label">緯度 最大</span><input type="number" id="viz-lat-max" step="0.1" placeholder="例: 46.0"></div>
+          <div class="filter-group"><span class="filter-label">経度 最小</span><input type="number" id="viz-lon-min" step="0.1" placeholder="例: 128.0"></div>
+          <div class="filter-group"><span class="filter-label">経度 最大</span><input type="number" id="viz-lon-max" step="0.1" placeholder="例: 146.0"></div>
+        </div>
+      </details>
+
+      <!-- 取得件数上限 -->
+      <div style="display:grid;grid-template-columns:1fr 2fr;gap:10px;margin-bottom:16px;align-items:end">
+        <div class="filter-group">
+          <span class="filter-label">最大取得件数</span>
+          <select id="viz-limit">
+            <option value="10000">10,000 件</option>
+            <option value="50000">50,000 件</option>
+            <option value="100000">100,000 件</option>
+            <option value="0" selected>無制限</option>
+          </select>
+        </div>
+        <div style="font-family:var(--mono);font-size:0.65rem;color:var(--text-dim);padding-bottom:4px;line-height:1.7">
+          ※ 地図表示は上位 M 5,000 件に自動サンプリングされます
+        </div>
+      </div>
+
+      <button id="viz-load-btn" class="btn-primary" onclick="loadFromDB()">
+        <span id="viz-load-label">▸ データ取得 &amp; 表示</span>
+        <span id="viz-load-spinner" style="display:none">⏳ 取得中...</span>
+      </button>
+      <div id="viz-load-log" style="margin-top:10px;font-family:var(--mono);font-size:0.68rem;color:#ff4757;display:none"></div>
+
+    </div>
+  </div>
+
+  <!-- OR 区切り: JMA Hypo -->
+  <div style="display:flex;align-items:center;gap:12px;max-width:720px;width:100%;margin-bottom:16px">
+    <div style="flex:1;height:1px;background:var(--border)"></div>
+    <span style="font-family:var(--mono);font-size:0.68rem;color:var(--text-dim)">または 気象庁速報値震源 GeoJSON を取得</span>
+    <div style="flex:1;height:1px;background:var(--border)"></div>
+  </div>
+
+  <!-- JMA Hypo パネル -->
+  <div class="panel" style="max-width:720px;width:100%;margin-bottom:20px">
+    <div class="panel-header">
+      <div class="panel-dot" style="background:var(--amber)"></div>
+      <span class="panel-title">気象庁 速報値震源 <small style="color:var(--text-dim);font-size:0.75em">bosai/hypo GeoJSON</small></span>
+    </div>
+    <div class="panel-body">
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="filter-group">
+          <span class="filter-label">開始日時 (JST)</span>
+          <input type="datetime-local" id="jma-date-from" step="60">
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">終了日時 (JST)</span>
+          <input type="datetime-local" id="jma-date-to" step="60">
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">
+        <div class="filter-group">
+          <span class="filter-label">M 最小</span>
+          <input type="number" id="jma-mag-min" step="0.1" min="-9.9" max="9.9" placeholder="すべて">
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">M 最大</span>
+          <input type="number" id="jma-mag-max" step="0.1" min="-9.9" max="9.9" placeholder="すべて">
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">震度フィルタ</span>
+          <select id="jma-si-filter">
+            <option value="all">すべて（無感含む）</option>
+            <option value="felt">有感のみ</option>
+            <option value="none">無感のみ</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="font-family:var(--mono);font-size:0.65rem;color:var(--text-dim);margin-bottom:12px;line-height:1.7">
+        ※ 最大60日まで取得可能。各日のGeoJSONファイルを並列取得します。
+      </div>
+
+      <button id="jma-load-btn" class="btn-primary" onclick="loadFromJMAHypo()">
+        <span id="jma-load-label">▸ 速報値震源を取得 &amp; 表示</span>
+        <span id="jma-load-spinner" style="display:none">⏳ 取得中...</span>
+      </button>
+      <div id="jma-load-log" style="margin-top:10px;font-family:var(--mono);font-size:0.68rem;color:#ff4757;display:none"></div>
+
+    </div>
+  </div>
+
+  <!-- OR 区切り: CSV -->
+  <div style="display:flex;align-items:center;gap:12px;max-width:720px;width:100%;margin-bottom:16px">
+    <div style="flex:1;height:1px;background:var(--border)"></div>
+    <span style="font-family:var(--mono);font-size:0.68rem;color:var(--text-dim)">または CSV ファイルを読み込む</span>
+    <div style="flex:1;height:1px;background:var(--border)"></div>
+  </div>
+
+  <!-- CSV ドロップゾーン -->
+  <div class="upload-box" id="drop-zone">
+    <span class="upload-icon">⬡</span>
+    <p class="upload-title">CSVファイルをドロップ</p>
+    <p class="upload-sub">
+      気象庁・Hi-net・防災科研 等のCSVに対応<br>
+      クリックしてファイルを選択することも可能<br><br>
+      <small style="color:#2a4060">必要な列: 日時・緯度・経度・深さ・マグニチュード</small>
+    </p>
+    <input type="file" id="file-input" accept=".csv,.txt">
+  </div>
+
+</section>
+
+<!-- ── JMA更新チェッカー ── -->
+<div id="jma-checker">
+  <div id="jma-checker-header" onclick="toggleJmaChecker()">
+    <span id="jma-checker-dot" class="loading"></span>
+    <span id="jma-checker-label">気象庁 確定値 更新履歴を確認中...</span>
+    <span id="jma-checker-toggle">▼</span>
+  </div>
+  <div id="jma-checker-body">
+    <div id="jma-checker-content"></div>
+    <div id="jma-checker-footer"></div>
+  </div>
+</div>
+
+<!-- ── Column Mapping Modal ── -->
+<div id="mapping-modal">
+  <div class="modal-box">
+    <div class="modal-title">▸ 列マッピング設定</div>
+    <p style="color:var(--text-dim);font-size:0.82rem;margin-bottom:20px;">
+      CSVの列名と各フィールドを対応付けてください
+    </p>
+    <div id="map-rows"></div>
+    <button class="btn-primary" id="confirm-mapping">LOAD DATA ▸</button>
+  </div>
+</div>
+
+<!-- ── Dashboard ── -->
+<div id="dashboard">
+
+  <!-- TAB: 可視化 -->
+  <div class="tab-pane active" id="tab-viz">
+  <div id="viz-layout">
+
+  <!-- Sidebar Filter -->
+  <div id="filter-bar">
+
+    <!-- DB 期間再取得セクション -->
+    <div id="db-requery-section" style="display:none">
+      <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)">▸ DB 期間再取得</div>
+      <div class="filter-group">
+        <span class="filter-label">開始日</span>
+        <input type="date" id="sb-date-from">
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">終了日</span>
+        <input type="date" id="sb-date-to">
+      </div>
+      <!-- クイック選択ボタン -->
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin:8px 0">
+        <button class="viz-quick-btn" onclick="setQuickRange(7)">前7日</button>
+        <button class="viz-quick-btn" onclick="setQuickRange(30)">前1か月</button>
+        <button class="viz-quick-btn" onclick="setQuickRange(90)">前3か月</button>
+        <button class="viz-quick-btn" onclick="setQuickRange(365)">前1年</button>
+        <button class="viz-quick-btn" onclick="setQuickRange(0)">全期間</button>
+      </div>
+      <button id="sb-requery-btn" class="btn-primary" style="width:100%;margin-top:4px;padding:8px" onclick="reQueryDB()">
+        <span id="sb-requery-label">⟳ DB 再検索</span>
+        <span id="sb-requery-spinner" style="display:none">⏳ 取得中...</span>
+      </button>
+      <div id="sb-requery-log" style="margin-top:6px;font-family:var(--mono);font-size:0.65rem;color:#ff4757;display:none"></div>
+      <div style="height:1px;background:var(--border);margin:12px 0"></div>
+    </div>
+
+    <div class="filter-row">
+      <div class="filter-section">
+        <span class="filter-section-label">▸ 表示フィルタ（期間）</span>
+        <div class="filter-group">
+          <span class="filter-label">開始日</span>
+          <input type="date" id="f-date-start">
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">終了日</span>
+          <input type="date" id="f-date-end">
+        </div>
+      </div>
+      <div class="filter-section">
+        <span class="filter-section-label">▸ マグニチュード</span>
+        <div class="filter-group">
+          <span class="filter-label">最小 M</span>
+          <input type="number" id="f-mag-min" step="0.1" min="0" placeholder="0.0">
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">最大 M</span>
+          <input type="number" id="f-mag-max" step="0.1" min="0" placeholder="9.9">
+        </div>
+      </div>
+      <div class="filter-section">
+        <span class="filter-section-label">▸ 深さ (km)</span>
+        <div class="filter-group">
+          <span class="filter-label">最小</span>
+          <input type="number" id="f-depth-min" step="1" min="0" placeholder="0">
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">最大</span>
+          <input type="number" id="f-depth-max" step="1" min="0" placeholder="700">
+        </div>
+      </div>
+      <div class="filter-section">
+        <span class="filter-section-label">▸ 緯度 (°N)</span>
+        <div class="filter-group">
+          <span class="filter-label">最小</span>
+          <input type="number" id="f-lat-min" step="0.1" placeholder="-90">
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">最大</span>
+          <input type="number" id="f-lat-max" step="0.1" placeholder="90">
+        </div>
+      </div>
+      <div class="filter-section">
+        <span class="filter-section-label">▸ 経度 (°E)</span>
+        <div class="filter-group">
+          <span class="filter-label">最小</span>
+          <input type="number" id="f-lon-min" step="0.1" placeholder="-180">
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">最大</span>
+          <input type="number" id="f-lon-max" step="0.1" placeholder="180">
+        </div>
+      </div>
+      <div class="filter-section filter-section--btns">
+        <button id="apply-filter">APPLY</button>
+        <button id="reset-btn">RESET</button>
+      </div>
+    </div>
+  </div><!-- /filter-bar -->
+  <div id="viz-main">
+
+  <!-- Row1: Map (full) -->
+  <div class="full-width panel">
+    <div class="panel-header">
+      <div class="panel-dot"></div>
+      <span class="panel-title">震源マップ</span>
+      <span style="margin-left:auto;color:var(--text-dim);font-size:0.7rem;font-family:var(--mono)">
+        円サイズ ∝ マグニチュード / 色 ∝ 深さ
+      </span>
+    </div>
+    <div id="map"></div>
+    <div id="map-sample-note" style="display:none;position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(13,20,32,0.85);color:#ffa502;font-family:'Share Tech Mono',monospace;font-size:0.65rem;padding:3px 10px;border-radius:3px;z-index:1000;pointer-events:none"></div>
+  </div>
+
+  <!-- Row2: Time series (full width) -->
+  <div class="full-width panel">
+    <div class="panel-header"><div class="panel-dot" style="background:var(--accent3)"></div><span class="panel-title">マグニチュード時系列</span></div>
+    <div class="panel-body"><div class="chart-wrap-timeseries"><canvas id="chart-timeseries"></canvas></div></div>
+  </div>
+
+  <!-- Row3: Cumulative earthquake count (full width) -->
+  <div class="full-width panel">
+    <div class="panel-header"><div class="panel-dot" style="background:#2ed573"></div><span class="panel-title">地震積算回数</span></div>
+    <div class="panel-body"><div class="chart-wrap-wide"><canvas id="chart-cumulative"></canvas></div></div>
+  </div>
+
+  <!-- Row5: Mag histogram (full width) -->
+  <div class="full-width panel">
+    <div class="panel-header"><div class="panel-dot" style="background:#2ed573"></div><span class="panel-title">マグニチュード頻度分布</span></div>
+    <div class="panel-body"><div class="chart-wrap-wide"><canvas id="chart-maghist"></canvas></div></div>
+  </div>
+
+
+  <!-- Row4: Table -->
+  <div class="panel full-width">
+    <div class="panel-header"><div class="panel-dot" style="background:var(--text-dim)"></div><span class="panel-title">データテーブル</span><span id="table-count" style="margin-left:auto;color:var(--text-dim);font-size:0.7rem;font-family:var(--mono)"></span><select id="table-row-limit" onchange="updateTable()" style="margin-left:12px;font-size:0.7rem;font-family:var(--mono);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px"><option value="300">300件</option><option value="500">500件</option><option value="1000" selected>1000件</option><option value="2000">2000件</option><option value="5000">5000件</option></select><button id="csv-export-btn" onclick="exportCSV()">⬇ CSV出力</button></div>
+    <div class="panel-body" style="padding:0">
+      <div id="table-wrap"><table id="data-table"><thead id="t-head"></thead><tbody id="t-body"></tbody></table></div>
+    </div>
+  </div>
+</div>
+  </div><!-- /viz-main -->
+  </div><!-- /viz-layout -->
+
+  </div><!-- /tab-viz -->
+
+  <!-- TAB: ETAS解析 -->
+  <div class="tab-pane" id="tab-etas">
+  <div class="etas-inner">
+
+    <!-- データ未読込み状態 -->
+    <div id="etas-no-data" style="display:none;text-align:center;padding:80px 20px">
+      <div style="font-size:2.5rem;margin-bottom:16px;opacity:0.4">⬡</div>
+      <p style="font-family:var(--mono);color:var(--text-dim);font-size:0.9rem;line-height:2">
+        まず「可視化」タブでデータを読み込んでください<br>
+        <span style="font-size:0.75rem">DB取得 または CSVファイル → 同じデータをそのままETAS解析に使用します</span>
+      </p>
+      <button class="btn-primary" style="margin-top:24px;width:auto;padding:10px 32px"
+        onclick="switchTab('viz')">← 可視化タブへ</button>
+    </div>
+
+    <!-- データ読込済み → ETAS設定パネル -->
+    <div id="etas-upload-area" style="display:none">
+
+      <!-- 現在のデータセット情報 -->
+      <div class="panel" style="max-width:900px;margin:0 auto 20px">
+        <div class="panel-header">
+          <div class="panel-dot" style="background:#2ed573"></div>
+          <span class="panel-title">使用データセット</span>
+          <button onclick="switchTab('viz')" style="margin-left:auto;padding:4px 12px;background:transparent;border:1px solid var(--border);color:var(--text-dim);border-radius:3px;font-family:var(--mono);font-size:0.68rem;cursor:pointer;transition:all 0.2s"
+            onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
+            onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">
+            ← データ変更
+          </button>
+        </div>
+        <div class="panel-body" id="etas-dataset-info"
+          style="font-family:var(--mono);font-size:0.85rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 28px">
+        </div>
+      </div>
+
+      <!-- ETAS パラメータ設定 -->
+      <div class="panel" style="max-width:900px;margin:0 auto 20px">
+        <div class="panel-header">
+          <div class="panel-dot" style="background:var(--accent3)"></div>
+          <span class="panel-title">ETAS 解析パラメータ</span>
+        </div>
+        <div class="panel-body">
+
+          <!-- 列マッピング確認（DB由来の場合のみ） -->
+          <div id="etas-col-confirm" style="margin-bottom:16px;display:none">
+            <div style="font-family:var(--mono);font-size:0.65rem;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">使用列（可視化タブの設定を引き継ぎ）</div>
+            <div id="etas-col-confirm-body" style="display:flex;flex-wrap:wrap;gap:8px;font-family:var(--mono);font-size:0.75rem"></div>
+          </div>
+
+          <!-- ETASパラメータ -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">
+            <div class="filter-group">
+              <span class="filter-label">Mc（空白=自動推定）</span>
+              <input type="number" id="etas-mc" step="0.1" min="0" max="9" placeholder="自動">
+            </div>
+            <div class="filter-group">
+              <span class="filter-label">推定手法</span>
+              <select id="etas-method">
+                <option value="">自動（N&lt;5000: MLE）</option>
+                <option value="mle">MLE（直接最尤法）</option>
+                <option value="em">EM（大規模向け）</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <span class="filter-label">時間窓 (日・空白=自動)</span>
+              <input type="number" id="etas-twindow" step="1" min="1" placeholder="自動">
+            </div>
+          </div>
+
+          <!-- 実行ボタン -->
+          <button id="etas-run-btn" class="btn-primary" onclick="runETASFromLoadedData()">
+            <span id="etas-run-label">▸ ETAS 解析実行</span>
+            <span id="etas-run-spinner" style="display:none">⏳ 解析中...（数十秒〜数分）</span>
+          </button>
+          <div id="etas-run-log" style="margin-top:12px;font-family:var(--mono);font-size:0.68rem;color:var(--text-dim);white-space:pre-wrap;max-height:120px;overflow-y:auto;display:none"></div>
+
+          <!-- OR: JSON直接読み込み -->
+          <div style="display:flex;align-items:center;gap:12px;margin:20px 0 12px">
+            <div style="flex:1;height:1px;background:var(--border)"></div>
+            <span style="font-family:var(--mono);font-size:0.65rem;color:var(--text-dim)">または JSON ファイルを直接読み込む</span>
+            <div style="flex:1;height:1px;background:var(--border)"></div>
+          </div>
+          <div class="etas-load-box" onclick="document.getElementById('etas-json-input').click()"
+            style="padding:24px;margin:0">
+            <p style="font-size:0.85rem;font-weight:600;margin-bottom:4px;color:var(--accent3)">etas_output.json を読み込む</p>
+            <p style="color:var(--text-dim);font-size:0.75rem">事前生成済みの JSON を直接表示する場合</p>
+            <input type="file" id="etas-json-input" accept=".json" style="display:none">
+          </div>
+
+        </div>
+      </div>
+    </div><!-- /etas-upload-area -->
+
+    <!-- 解析結果 -->
+    <div id="etas-results" style="display:none">
+
+      <!-- メタ情報 -->
+      <div class="panel full-width" style="margin-bottom:24px">
+        <div class="panel-header"><div class="panel-dot" style="background:var(--accent3)"></div><span class="panel-title">解析メタデータ</span></div>
+        <div class="panel-body" id="etas-meta" style="font-family:var(--mono);font-size:0.88rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 32px;"></div>
+      </div>
+
+      <!-- パラメータ推定値 -->
+      <div class="panel full-width" style="margin-bottom:24px">
+        <div class="panel-header"><div class="panel-dot" style="background:var(--accent3)"></div><span class="panel-title">パラメータ推定値（95% CI）</span></div>
+        <div class="panel-body">
+          <div class="param-grid" id="param-grid"></div>
+          <p style="color:var(--text-dim);font-size:0.72rem;font-family:var(--mono)">
+            μ: 背景レート　K: 余震生産性　α: M依存性　c,p: 大森・宇津則パラメータ
+          </p>
+        </div>
+      </div>
+
+      <!-- AIC比較 -->
+      <div style="margin-bottom:24px;">
+        <div class="panel">
+          <div class="panel-header"><div class="panel-dot" style="background:#2ed573"></div><span class="panel-title">AICによるモデル比較</span></div>
+          <div class="panel-body">
+            <table class="aic-table">
+              <thead><tr><th>モデル</th><th>パラメータ数</th><th>log L</th><th>AIC</th></tr></thead>
+              <tbody id="aic-tbody"></tbody>
+            </table>
+            <p id="aic-verdict" style="margin-top:14px;font-family:var(--mono);font-size:0.8rem"></p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><div class="panel-dot" style="background:#a55eea"></div><span class="panel-title">残差解析（KSテスト）</span></div>
+          <div class="panel-body">
+            <div id="ks-result" style="font-family:var(--mono);font-size:0.88rem;margin-bottom:16px"></div>
+            <div class="chart-wrap"><canvas id="chart-ks"></canvas></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- λ(t) グラフ -->
+      <div class="panel full-width" style="margin-bottom:24px">
+        <div class="panel-header"><div class="panel-dot" style="background:var(--accent)"></div><span class="panel-title">強度関数 λ(t)</span></div>
+        <div class="panel-body"><div class="chart-wrap-wide"><canvas id="chart-lambda"></canvas></div></div>
+      </div>
+
+      <!-- 積分グラフ -->
+      <div class="panel full-width" style="margin-bottom:24px">
+        <div class="panel-header">
+          <div class="panel-dot" style="background:#2ed573"></div>
+          <span class="panel-title">∫λ(t)dt と観測累積数の比較</span>
+          <span style="margin-left:auto;font-size:0.68rem;color:var(--text-dim);font-family:var(--mono)">モデル予測（水色）と実測（白）が一致するほど適合良好</span>
+        </div>
+        <div class="panel-body"><div class="chart-wrap-wide"><canvas id="chart-lambda-int"></canvas></div></div>
+      </div>
+
+      <!-- 地震活動異常性モニタリング -->
+      <div class="panel full-width" id="anomaly-panel" style="display:none;margin-bottom:24px">
+        <div class="panel-header">
+          <div class="panel-dot" style="background:#ff4757"></div>
+          <span class="panel-title">地震活動異常性モニタリング</span>
+          <span style="margin-left:8px;color:var(--text-dim);font-family:var(--mono);font-size:0.65rem">Nishikawa &amp; Nishimura (2019)</span>
+          <span id="anomaly-count" style="margin-left:auto;color:#ff4757;font-size:0.7rem;font-family:var(--mono)"></span>
+        </div>
+        <div class="panel-body">
+          <div id="anomaly-param-bar" class="anomaly-param-bar" style="margin-bottom:12px"></div>
+          <div class="chart-wrap-timeseries"><canvas id="chart-anomaly"></canvas></div>
+          <div id="anomaly-list"></div>
+        </div>
+      </div>
+
+      <!-- 空間パラメータ -->
+      <div class="panel full-width" id="spatial-panel" style="display:none;margin-bottom:24px">
+        <div class="panel-header"><div class="panel-dot" style="background:#ff6348"></div><span class="panel-title">空間ETASパラメータ</span></div>
+        <div class="panel-body" id="spatial-content" style="font-family:var(--mono);font-size:0.85rem"></div>
+      </div>
+
+    </div><!-- /etas-results -->
+  </div><!-- /etas-inner -->
+  </div><!-- /tab-etas -->
+
+
+<!-- Notification -->
+<div id="notif"></div>
+
+<script>
+/* ─────────────────────────────────────────────
+   STATE
+───────────────────────────────────────────── */
+let rawData = [];       // 全データ
+let filteredData = [];  // フィルタ後
+let _dbInfo = null;     // DB テーブル情報キャッシュ
+let _dataSource = null; // 'db' | 'csv'
+let _lastVizQuery = null; // 最後のDB取得パラメータ（ETAS再利用用）
+let colMap = {};        // 列マッピング
+let csvHeaders = [];    // CSVヘッダー
+let leafletMap = null;
+let mapLoaded  = false;
+let charts = {};
+
+const FIELDS = [
+  { key: 'datetime', label: '日時', required: true },
+  { key: 'lat',      label: '緯度', required: true },
+  { key: 'lon',      label: '経度', required: true },
+  { key: 'depth',    label: '深さ (km)', required: true },
+  { key: 'mag',      label: 'マグニチュード', required: true },
+  { key: 'place',    label: '震源地', required: false },
+];
+
+/* ─────────────────────────────────────────────
+   UPLOAD & PARSE
+───────────────────────────────────────────── */
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+document.getElementById('reload-btn').addEventListener('click', () => {
+  document.getElementById('upload-section').classList.remove('hidden');
+  document.getElementById('dashboard').classList.remove('visible');
+  rawData = []; filteredData = [];
+  Object.values(charts).forEach(c => c.destroy()); charts = {};
+  fileInput.value = '';
+});
+
+function handleFile(file) {
+  Papa.parse(file, {
+    header: true, skipEmptyLines: true,
+    worker: true,  // バックグラウンドスレッドで解析（UIスレッドをブロックしない）
+    complete: result => {
+      if (!result.data.length) { notify('データが見つかりません', 'error'); return; }
+      csvHeaders = result.meta.fields;
+      openMappingModal(csvHeaders, result.data);
+    },
+    error: () => notify('CSVの解析に失敗しました', 'error')
+  });
+}
+
+/* ─────────────────────────────────────────────
+   COLUMN MAPPING MODAL
+───────────────────────────────────────────── */
+function openMappingModal(headers, rawRows) {
+  const container = document.getElementById('map-rows');
+  container.innerHTML = '';
+
+  // 自動推定
+  const guesses = {};
+  headers.forEach(h => {
+    const hl = h.toLowerCase();
+    if (!guesses.datetime && /time|date|発生|日時/.test(hl)) guesses.datetime = h;
+    if (!guesses.lat  && /lat|緯度/.test(hl))  guesses.lat = h;
+    if (!guesses.lon  && /lon|lng|経度/.test(hl)) guesses.lon = h;
+    if (!guesses.depth && /dep|深/.test(hl))   guesses.depth = h;
+    if (!guesses.mag  && /mag|規模|ﾏｸﾞ/.test(hl)) guesses.mag = h;
+    if (!guesses.place && /place|地名|震源地|region|name/.test(hl)) guesses.place = h;
+  });
+
+  FIELDS.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'map-row';
+    const opts = headers.map(h => `<option value="${h}" ${guesses[f.key]===h?'selected':''}>${h}</option>`).join('');
+    row.innerHTML = `
+      <span class="map-label">${f.label}${f.required?'<span style="color:var(--accent2)">*</span>':''}</span>
+      <select id="cm-${f.key}">
+        ${f.required?'':'<option value="">（使用しない）</option>'}
+        ${opts}
+      </select>`;
+    container.appendChild(row);
+  });
+
+  document.getElementById('mapping-modal').classList.add('open');
+
+  document.getElementById('confirm-mapping').onclick = () => {
+    colMap = {};
+    FIELDS.forEach(f => {
+      const v = document.getElementById(`cm-${f.key}`).value;
+      if (v) colMap[f.key] = v;
+    });
+    if (!colMap.datetime || !colMap.lat || !colMap.lon || !colMap.depth || !colMap.mag) {
+      notify('必須列をすべて設定してください', 'error'); return;
+    }
+    document.getElementById('mapping-modal').classList.remove('open');
+    processData(rawRows);
+  };
+}
+
+/* ─────────────────────────────────────────────
+   DATA PROCESSING
+───────────────────────────────────────────── */
+function processData(rows) {
+  // プログレス表示
+  const prog = document.getElementById('upload-progress');
+  if (prog) { prog.style.display = 'block'; prog.textContent = '読み込み中... 0%'; }
+
+  const CHUNK = 2000; // 一度に処理する行数
+  const total = rows.length;
+  let i = 0;
+  rawData = [];
+
+  // parseDate を1回だけコンパイルして使い回す（クロージャで列名固定）
+  const cDt    = colMap.datetime;
+  const cLat   = colMap.lat;
+  const cLon   = colMap.lon;
+  const cDep   = colMap.depth;
+  const cMag   = colMap.mag;
+  const cPlace = colMap.place;
+
+  function processChunk() {
+    const end = Math.min(i + CHUNK, total);
+    for (; i < end; i++) {
+      const r = rows[i];
+      const dt    = parseDate(r[cDt]);
+      const lat   = parseFloat(r[cLat]);
+      const lon   = parseFloat(r[cLon]);
+      const depth = parseFloat(r[cDep]);
+      const mag   = parseFloat(r[cMag]);
+      if (!dt || isNaN(lat) || isNaN(lon) || isNaN(depth) || isNaN(mag)) continue;
+      rawData.push({ dt, lat, lon, depth, mag, place: cPlace ? r[cPlace] : '', source: 'csv' });
+    }
+
+    const pct = Math.round(i / total * 100);
+    if (prog) prog.textContent = `読み込み中... ${pct}%  (${i.toLocaleString()} / ${total.toLocaleString()} 件)`;
+
+    if (i < total) {
+      setTimeout(processChunk, 0); // 次チャンクをUIスレッドに返してからまた実行
+      return;
+    }
+
+    // 全行処理完了
+    rawData.sort((a, b) => a.dt - b.dt);
+    if (prog) prog.style.display = 'none';
+
+    if (!rawData.length) { notify('有効なデータが0件です。列マッピングを確認してください', 'error'); return; }
+    notify(`${rawData.length} 件のデータを読み込みました`, 'success');
+
+    _dataSource   = 'csv';
+    _lastVizQuery = null;
+
+    filteredData = [...rawData];
+    initFilterDefaults();
+    showDashboard();
+  }
+
+  processChunk();
+}
+
+function parseDate(str) {
+  if (!str) return null;
+  let s = str.trim()
+    .replace(/\//g, '-')
+    .replace(/年|月/g, '-')
+    .replace(/日/g, ' ')
+    .replace('T', ' ');
+  // 秒が省略されている場合（例: "2026-02-21 10:35"）に :00 を補完
+  // HH:MM で終わっていて HH:MM:SS でない場合
+  if (/\d{2}:\d{2}$/.test(s)) s += ':00';
+  const d = new Date(s);
+  return isNaN(d) ? null : d;
+}
+
+/* ─────────────────────────────────────────────
+   FILTER
+───────────────────────────────────────────── */
+function initFilterDefaults() {
+  const dateTimes = rawData.map(d => d.dt.getTime());
+  const toISO = d => d.toISOString().slice(0, 10);
+  document.getElementById('f-date-start').value = toISO(new Date(dateTimes.reduce((a,b)=>a<b?a:b)));
+  document.getElementById('f-date-end').value   = toISO(new Date(dateTimes.reduce((a,b)=>a>b?a:b)));
+  document.getElementById('f-mag-min').value   = '';
+  document.getElementById('f-mag-max').value   = '';
+  document.getElementById('f-depth-min').value = '';
+  document.getElementById('f-depth-max').value = '';
+  document.getElementById('f-lat-min').value   = '';
+  document.getElementById('f-lat-max').value   = '';
+  document.getElementById('f-lon-min').value   = '';
+  document.getElementById('f-lon-max').value   = '';
+}
+
+document.getElementById('apply-filter').addEventListener('click', applyFilter);
+document.getElementById('reset-btn').addEventListener('click', () => {
+  filteredData = [...rawData]; initFilterDefaults(); updateAll();
+});
+
+function applyFilter() {
+  const ds = document.getElementById('f-date-start').value;
+  const de = document.getElementById('f-date-end').value;
+  const mmn   = parseFloat(document.getElementById('f-mag-min').value);
+  const mmx   = parseFloat(document.getElementById('f-mag-max').value);
+  const dmin  = parseFloat(document.getElementById('f-depth-min').value);
+  const dmax  = parseFloat(document.getElementById('f-depth-max').value);
+  const latmn = parseFloat(document.getElementById('f-lat-min').value);
+  const latmx = parseFloat(document.getElementById('f-lat-max').value);
+  const lonmn = parseFloat(document.getElementById('f-lon-min').value);
+  const lonmx = parseFloat(document.getElementById('f-lon-max').value);
+  const start = ds ? new Date(ds) : new Date(0);
+  const end   = de ? new Date(de + 'T23:59:59') : new Date(9e15);
+  filteredData = rawData.filter(d =>
+    d.dt >= start && d.dt <= end &&
+    (isNaN(mmn)   || d.mag   >= mmn)   &&
+    (isNaN(mmx)   || d.mag   <= mmx)   &&
+    (isNaN(dmin)  || d.depth >= dmin)  &&
+    (isNaN(dmax)  || d.depth <= dmax)  &&
+    (isNaN(latmn) || d.lat   >= latmn) &&
+    (isNaN(latmx) || d.lat   <= latmx) &&
+    (isNaN(lonmn) || d.lon   >= lonmn) &&
+    (isNaN(lonmx) || d.lon   <= lonmx)
+  ).sort((a, b) => a.dt - b.dt);
+  updateAll();
+  notify(`フィルタ適用: ${filteredData.length} 件`, 'success');
+}
+
+/* ─────────────────────────────────────────────
+   SHOW DASHBOARD
+───────────────────────────────────────────── */
+function showDashboard() {
+  document.getElementById('upload-section').classList.add('hidden');
+  document.getElementById('dashboard').classList.add('visible');
+  // DB接続済みならサイドバーの再検索セクションを表示
+  if (_dataSource === 'db' && _dbInfo) {
+    document.getElementById('db-requery-section').style.display = 'block';
+  }
+  window.scrollTo(0, 0);
+  if (!leafletMap) initMap();
+  updateAll();
+  // レイアウト確定後にLeafletのサイズを再計算
+  setTimeout(() => { if (leafletMap) leafletMap.resize(); }, 100);
+}
+
+function updateAll() {
+  updateHeader();
+  updateMap();
+  updateTimeseries();
+  updateCumulative();
+  updateMagHist();
+  updateTable();
+}
+
+
+
+/* ─────────────────────────────────────────────
+   HEADER STATS
+───────────────────────────────────────────── */
+function updateHeader() {
+  const d = filteredData;
+  const _min = arr => arr.reduce((a,b)=>a<b?a:b);
+  const _max = arr => arr.reduce((a,b)=>a>b?a:b);
+  document.getElementById('h-total').textContent = d.length.toLocaleString();
+  const mags = d.map(x=>x.mag).filter(v => v != null && !isNaN(v));
+  document.getElementById('h-maxmag').textContent = mags.length ? _max(mags).toFixed(1) : '—';
+  if (d.length) {
+    const times = d.map(x => x.dt.getTime());
+    const fmt   = dt => dt.getFullYear() + '/' + (dt.getMonth()+1) + '/' + dt.getDate();
+    document.getElementById('h-range').textContent =
+      fmt(new Date(_min(times))) + '〜' + fmt(new Date(_max(times)));
+    const lats = d.map(x => x.lat).filter(v => v != null && !isNaN(v));
+    const lons = d.map(x => x.lon).filter(v => v != null && !isNaN(v));
+    document.getElementById('h-lat').textContent = lats.length
+      ? _min(lats).toFixed(1) + '〜' + _max(lats).toFixed(1)
+      : '—';
+    document.getElementById('h-lon').textContent = lons.length
+      ? _min(lons).toFixed(1) + '〜' + _max(lons).toFixed(1)
+      : '—';
+  } else {
+    document.getElementById('h-range').textContent = '—';
+    document.getElementById('h-lat').textContent   = '—';
+    document.getElementById('h-lon').textContent   = '—';
+  }
+}
+
+/* ─────────────────────────────────────────────
+   MAP
+───────────────────────────────────────────── */
+const MAP_MAX_MARKERS = 400000;
+
+/* ── Haversine 距離 (km) ── */
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371, dLat = (lat2-lat1)*Math.PI/180, dLon = (lon2-lon1)*Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+/* ─── DualScale コントロール (L字型: 縦=N-S / 横=E-W) ─── */
+class DualScaleControl {
+  onAdd(map) {
+    this._map = map;
+    const w = document.createElement('div');
+    w.className = 'maplibregl-ctrl ds-wrap';
+    this._latLabel = document.createElement('div');
+    this._latLabel.className = 'ds-lat-label';
+    this._L = document.createElement('div');
+    this._L.className = 'ds-L';
+    this._lonLabel = document.createElement('div');
+    this._lonLabel.className = 'ds-lon-label';
+    w.appendChild(this._latLabel); w.appendChild(this._L); w.appendChild(this._lonLabel);
+    this._update = this._update.bind(this);
+    map.on('zoomend', this._update); map.on('moveend', this._update);
+    setTimeout(() => this._update(), 0);
+    return w;
+  }
+  onRemove() {
+    this._map.off('zoomend', this._update); this._map.off('moveend', this._update);
+  }
+  /* キリの良いスケール値を選ぶ (1/2/5 系列) */
+  _niceKm(km) {
+    const exp = Math.pow(10, Math.floor(Math.log10(km))), f = km / exp;
+    return f < 1.5 ? exp : f < 3.5 ? 2*exp : f < 7.5 ? 5*exp : 10*exp;
+  }
+  _fmtKm(km) { return km >= 1 ? km + ' km' : Math.round(km * 1000) + ' m'; }
+  _update() {
+    const map = this._map, c = map.getCanvas();
+    const cx = c.offsetWidth/2, cy = c.offsetHeight/2, ref = 100;
+    const ll0 = map.unproject([cx, cy]);
+    const llE = map.unproject([cx+ref, cy]);
+    const llN = map.unproject([cx, cy-ref]);
+    const kmPxLon = haversineKm(ll0.lat, ll0.lng, ll0.lat, llE.lng) / ref;
+    const kmPxLat = haversineKm(ll0.lat, ll0.lng, llN.lat, ll0.lng) / ref;
+    const targetKm = this._niceKm((kmPxLon + kmPxLat) / 2 * 80);
+    const lonPx = Math.max(10, Math.round(targetKm / kmPxLon));
+    const latPx = Math.max(10, Math.round(targetKm / kmPxLat));
+    this._L.style.width = lonPx + 'px'; this._L.style.height = latPx + 'px';
+    this._lonLabel.style.width = lonPx + 'px';
+    this._latLabel.textContent = 'N-S ' + this._fmtKm(targetKm);
+    this._lonLabel.textContent = 'E-W ' + this._fmtKm(targetKm);
+  }
+}
+
+function addDualScaleBar(map) {
+  map.addControl(new DualScaleControl(), 'bottom-left');
+}
+
+/* ─── 緯度経度グリッド（グラチキュール） ───────────────────── */
+function addGraticule(map) {
+
+  function gridStep(z) {
+    if (z >= 10) return 0.1; if (z >= 9) return 0.5; if (z >= 8) return 1;
+    if (z >= 6)  return 2;   if (z >= 4) return 5;   return 10;
+  }
+  function fmtLat(v) {
+    const a = Math.abs(v);
+    return (a % 1 === 0 ? a.toFixed(0) : a.toFixed(2)) + (v >= 0 ? '°N' : '°S');
+  }
+  function fmtLon(v) {
+    const n = ((v % 360) + 360) % 360, d = n > 180 ? n - 360 : n, a = Math.abs(d);
+    return (a % 1 === 0 ? a.toFixed(0) : a.toFixed(2)) + (d >= 0 ? '°E' : '°W');
+  }
+  function buildLines() {
+    const step = gridStep(map.getZoom()), features = [];
+    for (let lat = -90; lat <= 90; lat = +(lat+step).toFixed(9))
+      features.push({ type:'Feature', properties:{}, geometry:{ type:'LineString', coordinates:[[-180,lat],[180,lat]] } });
+    for (let lon = -180; lon <= 180; lon = +(lon+step).toFixed(9))
+      features.push({ type:'Feature', properties:{}, geometry:{ type:'LineString', coordinates:[[lon,-90],[lon,90]] } });
+    return { type:'FeatureCollection', features };
+  }
+
+  /* ラベルは CSS クラスを流用した HTML オーバーレイ */
+  const labelDiv = document.createElement('div');
+  labelDiv.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;';
+  map.getCanvasContainer().appendChild(labelDiv);
+
+  function buildLabels() {
+    labelDiv.innerHTML = '';
+    const b = map.getBounds(), step = gridStep(map.getZoom());
+    const latMin = Math.ceil(b.getSouth() / step) * step;
+    const latMax = Math.floor(b.getNorth() / step) * step;
+    const lonMin = Math.ceil(b.getWest()  / step) * step;
+    const lonMax = Math.floor(b.getEast() / step) * step;
+    for (let lat = latMin; lat <= latMax + 1e-9; lat = +(lat+step).toFixed(9)) {
+      if (lat < -90 || lat > 90) continue;
+      const {x, y} = map.project([b.getWest(), lat]);
+      const d = document.createElement('div');
+      d.className = 'gr-label gr-lat-label';
+      d.textContent = fmtLat(lat);
+      d.style.cssText = `position:absolute;left:${x+2}px;top:${y-8}px;`;
+      labelDiv.appendChild(d);
+    }
+    for (let lon = lonMin; lon <= lonMax + 1e-9; lon = +(lon+step).toFixed(9)) {
+      const {x, y} = map.project([lon, b.getSouth()]);
+      const d = document.createElement('div');
+      d.className = 'gr-label gr-lon-label';
+      d.textContent = fmtLon(lon);
+      d.style.cssText = `position:absolute;left:${x-30}px;top:${y+2}px;`;
+      labelDiv.appendChild(d);
+    }
+  }
+
+  map.addSource('graticule', { type:'geojson', data: buildLines() });
+  map.addLayer({ id:'graticule', type:'line', source:'graticule',
+    paint: { 'line-color':'rgba(100,160,220,0.18)', 'line-width':1 } });
+
+  function redraw() { map.getSource('graticule').setData(buildLines()); buildLabels(); }
+  map.on('zoomend', redraw);
+  map.on('moveend', buildLabels);
+  buildLabels();
+}
+
+function initMap() {
+  leafletMap = new maplibregl.Map({
+    container: 'map',
+    style: {
+      version: 8,
+      sources: { carto: { type:'raster',
+        tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
+        tileSize: 256, attribution: '©OpenStreetMap ©CARTO' }},
+      layers: [{ id:'carto', type:'raster', source:'carto' }]
+    },
+    center: [138, 36],   // [lon, lat]
+    zoom: 5
+  });
+  leafletMap.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+  leafletMap.on('load', () => {
+    addGraticule(leafletMap);
+
+    leafletMap.addSource('quakes', { type:'geojson',
+      data: { type:'FeatureCollection', features:[] } });
+    leafletMap.addLayer({
+      id: 'quakes', type: 'circle', source: 'quakes',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['get','mag'],
+          1, 3, 4, 6, 7, 14, 9, 20],
+        'circle-color':   ['get', 'color'],
+        'circle-opacity':  0.75,
+        'circle-stroke-color': 'rgba(0,0,0,0.3)',
+        'circle-stroke-width': 0.5
+      }
+    });
+
+    leafletMap.on('click', 'quakes', e => {
+      const p = e.features[0].properties;
+      new maplibregl.Popup({ maxWidth:'290px' })
+        .setLngLat(e.lngLat)
+        .setHTML(`<div style="font-family:monospace;font-size:12px;line-height:1.8">
+          ${p.datetime}<br>
+          <b>M${p.mag}</b><br>
+          ${p.place}<br>
+          ${p.lat_s}°, ${p.lon_s}°<br>
+          深さ ${p.depth} km<br>
+          <span style="opacity:0.6;font-size:0.9em">出典: ${p.source}</span>
+        </div>`)
+        .addTo(leafletMap);
+    });
+    leafletMap.on('mouseenter', 'quakes', () => { leafletMap.getCanvas().style.cursor = 'pointer'; });
+    leafletMap.on('mouseleave', 'quakes', () => { leafletMap.getCanvas().style.cursor = ''; });
+
+    addDualScaleBar(leafletMap);
+    mapLoaded = true;
+    if (filteredData.length) updateMap();
+  });
+}
+
+function depthColor(depth) {
+  // Depth[km] colormap: red(0)→orange(20)→yellow(30)→lime(50)→green(100)→cyan(200)→blue(700)
+  const stops = [
+    [0,   [140,  42,  51]],  // #8C2A33
+    [10,  [255,   0,   0]],  // red
+    [20,  [255, 165,   0]],
+    [30,  [255, 255,   0]],
+    [50,  [128, 255,   0]],
+    [100, [  0, 180,  80]],
+    [200, [  0, 200, 200]],
+    [700, [  0,  50, 200]],
+  ];
+  const d = Math.max(0, depth);
+  if (d >= stops[stops.length - 1][0]) {
+    const [r, g, b] = stops[stops.length - 1][1];
+    return `rgb(${r},${g},${b})`;
+  }
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [d0, c0] = stops[i];
+    const [d1, c1] = stops[i + 1];
+    if (d <= d1) {
+      const t = (d - d0) / (d1 - d0);
+      const r = Math.round(c0[0] + t * (c1[0] - c0[0]));
+      const g = Math.round(c0[1] + t * (c1[1] - c0[1]));
+      const b = Math.round(c0[2] + t * (c1[2] - c0[2]));
+      return `rgb(${r},${g},${b})`;
+    }
+  }
+  return `rgb(${stops[0][1].join(',')})`;
+}
+
+function updateMap() {
+  if (!mapLoaded) return;   // load イベント待ち
+  const total = filteredData.length;
+
+  // 件数が多い場合はM上位にダウンサンプリング（描画負荷対策）
+  let mapData = filteredData;
+  let sampled = false;
+  if (total > MAP_MAX_MARKERS) {
+    mapData = [...filteredData].sort((a,b) => b.mag - a.mag).slice(0, MAP_MAX_MARKERS);
+    sampled = true;
+  }
+
+  // GeoJSON に変換して一括更新（WebGL で高速描画）
+  leafletMap.getSource('quakes').setData({
+    type: 'FeatureCollection',
+    features: mapData.map(d => ({
+      type: 'Feature',
+      geometry: { type:'Point', coordinates:[d.lon, d.lat] },
+      properties: {
+        mag:      d.mag != null ? +d.mag.toFixed(1) : 0,
+        color:    depthColor(d.depth),
+        depth:    d.depth,
+        place:    d.place || '—',
+        lat_s:    d.lat.toFixed(3),
+        lon_s:    d.lon.toFixed(3),
+        source:   fmtSource(d.source),
+        datetime: d.dt.toLocaleString('ja-JP', {timeZone:'Asia/Tokyo'})
+      }
+    }))
+  });
+
+  // サンプリング注記
+  const note = document.getElementById('map-sample-note');
+  if (note) {
+    note.textContent = sampled
+      ? `表示: M上位 ${MAP_MAX_MARKERS.toLocaleString()} 件 / 全 ${total.toLocaleString()} 件` : '';
+    note.style.display = sampled ? 'block' : 'none';
+  }
+
+  if (mapData.length) {
+    const lons = mapData.map(d=>d.lon), lats = mapData.map(d=>d.lat);
+    leafletMap.fitBounds(
+      [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+      { padding: 20 }
+    );
+  }
+}
+
+/* ─────────────────────────────────────────────
+   CHART HELPERS
+───────────────────────────────────────────── */
+const chartDefaults = {
+  color: '#c8d8f0',
+  plugins: { legend: { display: false }, tooltip: { backgroundColor: '#0d1420', borderColor: '#1a2540', borderWidth: 1, titleColor: '#00d4ff', bodyColor: '#c8d8f0', titleFont: { family: 'Share Tech Mono' }, bodyFont: { family: 'Share Tech Mono' } } },
+  scales: {
+    x: { ticks: { color: '#4a6080', font: { family: 'Share Tech Mono', size: 10 } }, grid: { color: '#1a2540' } },
+    y: { ticks: { color: '#4a6080', font: { family: 'Share Tech Mono', size: 10 } }, grid: { color: '#1a2540' } }
+  }
+};
+
+function makeChart(id, config) {
+  if (charts[id]) { try { charts[id].destroy(); } catch {} charts[id] = null; }
+  const canvas = document.getElementById(id);
+  const existing = Chart.getChart(canvas);
+  if (existing) { try { existing.destroy(); } catch {} }
+  // responsive設定を強制
+  config.options = config.options || {};
+  config.options.responsive = true;
+  config.options.maintainAspectRatio = false;
+  charts[id] = new Chart(canvas, config);
+  return charts[id];
+}
+
+/* ─────────────────────────────────────────────
+   TIME SERIES
+───────────────────────────────────────────── */
+function updateTimeseries() {
+  const d = filteredData;
+  if (!d.length) return;
+
+  const _dts = d.map(e => e.dt.getTime());
+  const tMin = _dts.reduce((a,b)=>a<b?a:b);
+  const tMax = _dts.reduce((a,b)=>a>b?a:b);
+  const spanDays = (tMax - tMin) / 86400000;
+
+  // 各イベントの X 値 = 開始からの経過日数（実数）
+  // 全データポイント（tooltip参照用）
+  const points = d.map(e => ({
+    x: (e.dt.getTime() - tMin) / 86400000,
+    y: e.mag,
+    color: e.mag >= 6.0 ? 'rgba(255,71,87,0.9)'
+         : e.mag >= 5.0 ? 'rgba(255,99,72,0.85)'
+         : e.mag >= 4.0 ? 'rgba(255,165,2,0.8)'
+         : e.mag >= 3.0 ? 'rgba(0,212,255,0.7)'
+         :                'rgba(0,212,255,0.35)',
+    orig: e
+  }));
+
+  // 描画用ポイント: M3以上は全件、M3未満はランダム間引き（最大8000件）
+  const DRAW_MAX = 8000;
+  const smallEvs = points.filter(p => p.orig.mag < 3.0);
+  const largeEvs = points.filter(p => p.orig.mag >= 3.0);
+  let drawSmall = smallEvs;
+  if (smallEvs.length > DRAW_MAX) {
+    // 均等間引き
+    const step = Math.ceil(smallEvs.length / DRAW_MAX);
+    drawSmall = smallEvs.filter((_, i) => i % step === 0);
+  }
+  const drawPts = [...largeEvs, ...drawSmall].sort((a, b) => a.x - b.x);
+
+  // ── X 軸の目盛を時刻ベースで均等生成 ──
+  // 共通フォーマットヘルパー
+  const _d2 = n => String(n).padStart(2, '0');
+  const fmtDT   = v => { const d=new Date(tMin+v*86400000); return `${d.getMonth()+1}/${d.getDate()} ${_d2(d.getHours())}:${_d2(d.getMinutes())}`; };
+  const fmtDHm  = v => { const d=new Date(tMin+v*86400000); return `${d.getMonth()+1}/${d.getDate()} ${_d2(d.getHours())}:00`; };
+  const fmtDH   = v => { const d=new Date(tMin+v*86400000); return `${d.getMonth()+1}/${d.getDate()} ${_d2(d.getHours())}h`; };
+  const fmtYM   = v => { const d=new Date(tMin+v*86400000); return `${d.getFullYear()}/${_d2(d.getMonth()+1)} ${_d2(d.getDate())}`; };
+  const fmtYMo  = v => { const d=new Date(tMin+v*86400000); return `${d.getFullYear()}/${_d2(d.getMonth()+1)}`; };
+
+  let tickIntervalDays, minorIntervalDays, fmtTick;
+  if      (spanDays <=   3) { tickIntervalDays = 0.25;  minorIntervalDays = 0.0417; fmtTick = fmtDHm; }
+  else if (spanDays <=   7) { tickIntervalDays = 1;     minorIntervalDays = 0.25;   fmtTick = fmtDH;  }
+  else if (spanDays <=  14) { tickIntervalDays = 1;     minorIntervalDays = 0.5;    fmtTick = fmtDH;  }
+  else if (spanDays <=  60) { tickIntervalDays = 3;     minorIntervalDays = 1;      fmtTick = fmtDH;  }
+  else if (spanDays <= 180) { tickIntervalDays = 7;     minorIntervalDays = 1;      fmtTick = fmtYM;  }
+  else if (spanDays <= 730) { tickIntervalDays = 30;    minorIntervalDays = 7;      fmtTick = fmtYMo; }
+  else                      { tickIntervalDays = 90;    minorIntervalDays = 30;     fmtTick = fmtYMo; }
+
+  // 縦線＋グリッド線を描画するカスタムプラグイン
+  const vertLinePlugin = {
+    id: 'vertLines_ts',
+    afterDatasetsDraw(chart) {
+      const {ctx, scales: {x, y}, chartArea} = chart;
+      const yBottom = y.getPixelForValue(0);
+      const yTop    = chartArea.top;
+      const minLineW = Math.max(0.5, (chartArea.width / Math.max(drawPts.length, 1)) * 0.7);
+
+      ctx.save();
+
+      // ① イベント縦線（密集しすぎる場合は間引き）
+      // キャンバス幅に対して1px以下になるほど密集する場合はスキップ
+      const cw = chartArea.width;
+      const skip = Math.max(1, Math.ceil(drawPts.length / (cw * 1.5)));
+      for (let pi = 0; pi < drawPts.length; pi += skip) {
+        const p = drawPts[pi];
+        const xPx = x.getPixelForValue(p.x);
+        const yPx = y.getPixelForValue(p.y);
+        ctx.beginPath();
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth   = minLineW;
+        ctx.moveTo(xPx, yBottom);
+        ctx.lineTo(xPx, yPx);
+        ctx.stroke();
+      }
+
+      // ② 補助軸（minorInterval ごと、主軸以外）
+      ctx.lineWidth = 0.5;
+      ctx.setLineDash([2, 4]);
+      for (let v = 0; v <= spanDays + minorIntervalDays * 0.5; v += minorIntervalDays) {
+        const isMajor = Math.abs(v % tickIntervalDays) < minorIntervalDays * 0.01
+                     || Math.abs(v % tickIntervalDays - tickIntervalDays) < minorIntervalDays * 0.01;
+        if (isMajor) continue;  // 主軸位置はスキップ
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+        const xPx = x.getPixelForValue(v);
+        ctx.beginPath();
+        ctx.moveTo(xPx, yTop);
+        ctx.lineTo(xPx, yBottom);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+
+      // ③ 主軸（tickInterval ごと、実線）
+      ctx.strokeStyle = 'rgba(0,212,255,0.4)';
+      ctx.lineWidth   = 1;
+      for (let v = 0; v <= spanDays + tickIntervalDays * 0.5; v += tickIntervalDays) {
+        const xPx = x.getPixelForValue(v);
+        ctx.beginPath();
+        ctx.moveTo(xPx, yTop);
+        ctx.lineTo(xPx, yBottom);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+  };
+
+  makeChart('chart-timeseries', {
+    type: 'scatter',
+    plugins: [vertLinePlugin],
+    data: {
+      datasets: [{
+        data: drawPts.map(p => ({ x: p.x, y: p.y })),
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: drawPts.map(p => p.color)
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      color: '#c8d8f0',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0d1420', borderColor: '#1a2540', borderWidth: 1,
+          titleColor: '#00d4ff', bodyColor: '#c8d8f0',
+          titleFont: { family: 'Share Tech Mono' }, bodyFont: { family: 'Share Tech Mono' },
+          callbacks: {
+            title: () => '',
+            label: ctx => {
+              const e = drawPts[ctx.dataIndex]?.orig;
+              if (!e) return '';
+              return `${e.mag != null ? 'M' + e.mag.toFixed(1) : 'M—'}  ${e.dt.toLocaleString('ja-JP')}  深さ${e.depth}km`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          min: 0,
+          max: spanDays,
+          ticks: {
+            color: '#4a6080',
+            font: { family: 'Share Tech Mono', size: 9 },
+            maxRotation: 45,
+            stepSize: tickIntervalDays,
+            callback: v => fmtTick(v)
+          },
+          grid: {
+            display: true,
+            drawOnChartArea: true,
+            color: 'rgba(0,212,255,0.2)',
+            lineWidth: 1
+          }
+        },
+        y: {
+          min: 0,
+          title: { display: true, text: 'Magnitude', color: '#4a6080', font: { family: 'Share Tech Mono', size: 9 } },
+          ticks: { color: '#4a6080', font: { family: 'Share Tech Mono', size: 10 } },
+          grid: { color: '#1a2540' }
+        }
+      },
+      animation: { duration: 200 }
+    }
+  });
+}
+
+/* ─────────────────────────────────────────────
+   CUMULATIVE EARTHQUAKE COUNT
+───────────────────────────────────────────── */
+function updateCumulative() {
+  const d = filteredData;
+  if (!d.length) return;
+
+  // 日時順にソート
+  const sorted = [...d].sort((a, b) => a.dt - b.dt);
+
+  const t0 = sorted[0].dt.getTime();
+  const t1 = sorted[sorted.length - 1].dt.getTime();
+  const spanMs = t1 - t0;
+
+  // 積算回数ステップデータ（Unix ms → x軸）
+  const cumData = sorted.map((e, i) => ({
+    x: e.dt.getTime(),
+    y: i + 1
+  }));
+
+  // x軸ラベル用フォーマッタ
+  const monoFont = { family: 'Share Tech Mono', size: 9 };
+  const fmtTs = ts => {
+    const dt = new Date(ts);
+    const y  = dt.getFullYear();
+    const mo = String(dt.getMonth()+1).padStart(2,'0');
+    const da = String(dt.getDate()).padStart(2,'0');
+    const hh = String(dt.getHours()).padStart(2,'0');
+    const mm = String(dt.getMinutes()).padStart(2,'0');
+    // スパンが7日以内は時刻まで表示
+    return spanMs <= 7*86400000
+      ? `${y}/${mo}/${da} ${hh}:${mm}`
+      : `${y}/${mo}/${da}`;
+  };
+
+  makeChart('chart-cumulative', {
+    type: 'line',
+    data: {
+      datasets: [{
+        label: '積算回数',
+        data: cumData,
+        borderColor: '#2ed573',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        pointHoverBackgroundColor: '#2ed573',
+        fill: {
+          target: 'origin',
+          above: 'rgba(46,213,115,0.06)'
+        },
+        stepped: 'before',
+        tension: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      parsing: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0d1420',
+          borderColor: '#1a2540',
+          borderWidth: 1,
+          titleColor: '#00d4ff',
+          bodyColor: '#c8d8f0',
+          titleFont: monoFont,
+          bodyFont: monoFont,
+          callbacks: {
+            title: ctx => fmtTs(ctx[0].parsed.x),
+            label: ctx => ` 積算 ${ctx.parsed.y.toLocaleString()} 回`
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          min: t0,
+          max: t1,
+          title: { display: true, text: '日時', color: '#4a6080', font: monoFont },
+          ticks: {
+            color: '#4a6080',
+            font: monoFont,
+            maxRotation: 0,
+            autoSkip: true,
+            maxTicksLimit: 10,
+            callback: v => fmtTs(v)
+          },
+          grid: { color: '#1a2540' }
+        },
+        y: {
+          title: { display: true, text: '積算回数', color: '#4a6080', font: monoFont },
+          ticks: { color: '#4a6080', font: monoFont },
+          grid: { color: '#1a2540' },
+          beginAtZero: true
+        }
+      },
+      animation: { duration: 200 }
+    }
+  });
+}
+
+
+/* ─────────────────────────────────────────────
+   MAG HISTOGRAM
+───────────────────────────────────────────── */
+function updateMagHist() {
+  const d = filteredData;
+  if (!d.length) return;
+
+  const step = 0.1;
+  // NaN・null を防御的に除去（CSV読み込み時に除去済みだが二重チェック）
+  const mags = d.map(e => e.mag).filter(v => v != null && isFinite(v));
+  if (!mags.length) return;
+  const mMin = Math.floor(Math.min(...mags) / step) * step;
+  const mMax = Math.ceil (Math.max(...mags) / step) * step;
+  if (!isFinite(mMin) || !isFinite(mMax)) return;
+
+  // ── ビン生成 ──
+  const binEdges = [];
+  for (let m = mMin; m <= mMax + step * 0.5; m = Math.round((m + step) * 10) / 10)
+    binEdges.push(m);
+
+  // n(M): 各ビンの個数
+  const nBin = new Array(binEdges.length).fill(0);
+  mags.forEach(m => {
+    const i = Math.round((m - mMin) / step);
+    if (i >= 0 && i < nBin.length) nBin[i]++;
+  });
+
+  // N(M): 累積（M以上の個数）― ソート済み配列で O(N) に最適化
+  const magsSorted = [...mags].sort((a,b)=>a-b);
+  const nCum = binEdges.map(m => {
+    // 二分探索で m-0.05 以上のインデックスを探す
+    const thresh = m - step * 0.5;
+    let lo = 0, hi = magsSorted.length;
+    while (lo < hi) { const mid = (lo+hi)>>1; if (magsSorted[mid] < thresh) lo=mid+1; else hi=mid; }
+    return magsSorted.length - lo;
+  });
+
+  // ── Mc 推定（最大曲率法: 度数が最大のビン中心）──
+  const maxIdx = nBin.indexOf(Math.max(...nBin));
+  const mcEst  = binEdges[maxIdx];
+
+  // Chart.js用データ（null除去してscatter点に）
+  const nBinPts = binEdges.map((m,i) => nBin[i] > 0 ? {x: m, y: nBin[i]} : null).filter(Boolean);
+  const nCumPts = binEdges.map((m,i) => nCum[i] > 0 ? {x: m, y: nCum[i]} : null).filter(Boolean);
+
+  const monoFont = { family: 'Share Tech Mono', size: 9 };
+
+  makeChart('chart-maghist', {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {
+          label: 'N (累積)',
+          data: nCumPts,
+          pointStyle: 'circle',
+          pointRadius: 4,
+          pointBorderWidth: 1.5,
+          pointBackgroundColor: 'transparent',
+          pointBorderColor: '#ff6b9d',
+          showLine: false,
+        },
+        {
+          label: 'n (非累積)',
+          data: nBinPts,
+          pointStyle: 'triangle',
+          pointRadius: 5,
+          pointBorderWidth: 1.5,
+          pointBackgroundColor: 'transparent',
+          pointBorderColor: '#ffa502',
+          showLine: false,
+        },
+
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      color: '#c8d8f0',
+      plugins: {
+        legend: {
+          display: true,
+          labels: { color: '#c8d8f0', font: monoFont, boxWidth: 14, usePointStyle: true }
+        },
+        tooltip: {
+          backgroundColor: '#0d1420', borderColor: '#1a2540', borderWidth: 1,
+          titleColor: '#00d4ff', bodyColor: '#c8d8f0',
+          titleFont: monoFont, bodyFont: monoFont,
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}  M = ${ctx.parsed.x.toFixed(1)}`
+          }
+        },
+        annotation: {
+          annotations: {
+            mcLine: {
+              type: 'line', scaleID: 'x', value: mcEst,
+              borderColor: 'rgba(0,212,255,0.4)', borderWidth: 1, borderDash: [4,3],
+              label: { content: `Mc=${mcEst.toFixed(1)}`, display: true,
+                       color: '#00d4ff', font: monoFont, position: 'start' }
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Magnitude', color: '#4a6080', font: monoFont },
+          ticks: { color: '#4a6080', font: monoFont, stepSize: 0.5 },
+          grid: { color: '#1a2540' }
+        },
+        yLeft: {
+          type: 'logarithmic',
+          position: 'left',
+          title: { display: true, text: 'Frequency', color: '#4a6080', font: monoFont },
+          ticks: {
+            color: '#4a6080', font: monoFont,
+            callback: v => [1,2,5,10,20,50,100,200,500,1000,2000,5000,10000].includes(v) ? v : ''
+          },
+          grid: { color: '#1a2540' }
+        }
+      }
+    }
+  });
+}
+
+/* ─────────────────────────────────────────────
+   CSV EXPORT
+───────────────────────────────────────────── */
+function exportCSV() {
+  if (!filteredData.length) { notify('出力するデータがありません', ''); return; }
+
+  const cols = ['date', 'epicenter', 'lat', 'long', 'dep', 'magnitude'];
+  const rows = [cols];
+
+  filteredData.forEach(e => {
+    rows.push([
+      (() => {
+        const d = e.dt;
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      })(),
+      e.place  || '',
+      e.lat    != null ? e.lat.toFixed(4)  : '',
+      e.lon    != null ? e.lon.toFixed(4)  : '',
+      e.depth  != null ? e.depth           : '',
+      e.mag    != null ? e.mag.toFixed(1)  : ''
+    ]);
+  });
+
+  const escape = v => {
+    const s = String(v);
+    if (s.indexOf(',') >= 0 || s.indexOf('"') >= 0 || s.indexOf('\r') >= 0 || s.indexOf('\n') >= 0)
+      return '"' + s.split('"').join('""') + '"';
+    return s;
+  };
+  const csv = rows.map(r => r.map(escape).join(',')).join('\r\n');
+
+  const bom  = '\uFEFF';
+  const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+
+  const now  = new Date();
+  const pad  = n => String(n).padStart(2, '0');
+  const ts   = now.getFullYear() + pad(now.getMonth()+1) + pad(now.getDate())
+             + '_' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
+  a.href     = url;
+  a.download = 'earthquake_' + ts + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+
+  notify('CSV出力完了: ' + filteredData.length + ' 件', 'success');
+}
+
+
+
+/* ─────────────────────────────────────────────
+   TABLE
+───────────────────────────────────────────── */
+function magColor(m) {
+  if (m >= 7) return { bg: '#ff4757', fg: '#fff' };
+  if (m >= 6) return { bg: '#ff6348', fg: '#fff' };
+  if (m >= 5) return { bg: '#ffa502', fg: '#000' };
+  if (m >= 4) return { bg: '#ffdd57', fg: '#000' };
+  return { bg: '#2ed573', fg: '#000' };
+}
+
+function updateTable() {
+  const rowLimit = parseInt(document.getElementById('table-row-limit')?.value) || 300;
+  const d = filteredData.slice().reverse().slice(0, rowLimit);
+  document.getElementById('table-count').textContent = `表示: ${d.length} / ${filteredData.length} 件`;
+  const thead = document.getElementById('t-head');
+  const tbody = document.getElementById('t-body');
+  thead.innerHTML = '<tr><th>日時</th><th>震源地</th><th>緯度</th><th>経度</th><th>深さ</th><th>M</th></tr>';
+  tbody.innerHTML = d.map(e => {
+    const mc = magColor(e.mag);
+    return `<tr>
+      <td>${e.dt.toLocaleString('ja-JP')}</td>
+      <td>${e.place||'—'}</td>
+      <td>${e.lat.toFixed(3)}</td>
+      <td>${e.lon.toFixed(3)}</td>
+      <td>${e.depth}km</td>
+      <td><span class="mag-badge" style="background:${mc.bg};color:${mc.fg}">${e.mag != null ? 'M' + e.mag.toFixed(1) : '—'}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+/* ─────────────────────────────────────────────
+   NOTIFICATION
+───────────────────────────────────────────── */
+let notifTimer;
+/* =============================================================
+   JMA 更新履歴チェッカー
+   - ページ読み込み時に fetch + CORS proxy で更新履歴を取得
+   - localStorage に最終チェック日・既知エントリを保存
+   - 新着があればパネルを自動展開して警告表示
+============================================================= */
+
+const JMA_UPDATE_URL = 'https://www.data.jma.go.jp/eqev/data/bulletin/update.html';
+// CORSプロキシ（allorigins.win は無料・無登録で使用可能）
+const PROXY = 'https://api.allorigins.win/raw?url=';
+
+const STORAGE_KEY_KNOWN  = 'jma_known_dates';   // 既知の更新日一覧
+const STORAGE_KEY_CHECKED = 'jma_last_checked'; // 最終チェック日(YYYY-MM-DD)
+
+function toggleJmaChecker() {
+  const body   = document.getElementById('jma-checker-body');
+  const toggle = document.getElementById('jma-checker-toggle');
+  const open   = body.classList.toggle('open');
+  toggle.textContent = open ? '▲' : '▼';
+}
+
+function setCheckerState(state, label) {
+  const dot = document.getElementById('jma-checker-dot');
+  dot.className = state; // ok / warn / error / loading
+  document.getElementById('jma-checker-label').textContent = label;
+}
+
+function parseJmaUpdates(html) {
+  // <li> から YYYY/MM/DD で始まるエントリを抽出
+  const items = [...html.matchAll(/<li>([\s\S]*?)<\/li>/g)]
+    .map(m => m[1]);
+  const updates = [];
+  for (const item of items) {
+    const text = item.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const m    = text.match(/^(\d{4}\/\d{2}\/\d{2})\s+(.*)/);
+    if (!m) continue;
+    const [, date, description] = m;
+    // 修正詳細URL
+    const errataMatch = item.match(/href="(https:\/\/www\.data\.jma\.go\.jp\/eqev\/data\/bulletin\/errata\/[^"]+)"/);
+    // 影響を受ける年
+    const affectedYears = (description.match(/(\d{4})年/g) || [])
+      .map(y => y.replace('年', ''))
+      .filter((y, i, a) => a.indexOf(y) === i)
+      .sort();
+    // 種別
+    const hasAdd  = description.includes('追加');
+    const hasFix  = description.includes('修正') || description.includes('改訂');
+    const kind    = hasAdd && hasFix ? '追加＋修正' : hasAdd ? '追加' : hasFix ? '修正' : 'その他';
+    updates.push({ date, description, kind, errataUrl: errataMatch?.[1] || null, affectedYears });
+  }
+  return updates.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+function renderJmaResults(newUpdates, allUpdates, lastChecked) {
+  const content = document.getElementById('jma-checker-content');
+  const footer  = document.getElementById('jma-checker-footer');
+  footer.textContent = `最終チェック: ${new Date().toLocaleString('ja-JP')}`;
+
+  if (newUpdates.length === 0) {
+    setCheckerState('ok', `気象庁 確定値: 新着更新なし（既知 ${allUpdates.length} 件）`);
+    content.innerHTML = `<div style="color:var(--text-dim);padding:4px 0">新しい更新はありません。</div>`;
+    return;
+  }
+
+  setCheckerState('warn', `気象庁 確定値: 新着更新 ${newUpdates.length} 件あり ▶ クリックして確認`);
+
+  // 自動展開
+  document.getElementById('jma-checker-body').classList.add('open');
+  document.getElementById('jma-checker-toggle').textContent = '▲';
+
+  content.innerHTML = newUpdates.map(u => {
+    const years = u.affectedYears.length
+      ? `<div class="jma-entry-years">⚠ 修正対象年: ${u.affectedYears.join('・')} 年　DBにこれらの年のデータがある場合は再取得を検討してください</div>`
+      : '';
+    const link = u.errataUrl
+      ? `<div class="jma-entry-link"><a href="${u.errataUrl}" target="_blank" style="color:var(--accent)">修正詳細ページ →</a></div>`
+      : '';
+    return `
+      <div class="jma-entry">
+        <div class="jma-entry-date">${u.date}</div>
+        <div class="jma-entry-kind">種別: ${u.kind}</div>
+        <div class="jma-entry-desc">${u.description}</div>
+        ${years}${link}
+      </div>`;
+  }).join('');
+}
+
+async function checkJmaUpdates() {
+  // 同日は再チェックしない
+  const today       = new Date().toISOString().slice(0, 10);
+  const lastChecked = localStorage.getItem(STORAGE_KEY_CHECKED);
+  const knownDates  = JSON.parse(localStorage.getItem(STORAGE_KEY_KNOWN) || '[]');
+
+  // 初回（knownDatesが空）はチェックする、それ以外は同日スキップ
+  if (knownDates.length > 0 && lastChecked === today) {
+    setCheckerState('ok', `気象庁 確定値: 本日チェック済み（既知 ${knownDates.length} 件）`);
+    document.getElementById('jma-checker-footer').textContent =
+      `最終チェック: ${lastChecked}`;
+    return;
+  }
+
+  setCheckerState('loading', '気象庁 確定値 更新履歴を確認中...');
+
+  try {
+    const res  = await fetch(PROXY + encodeURIComponent(JMA_UPDATE_URL));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+
+    const allUpdates  = parseJmaUpdates(html);
+    if (allUpdates.length === 0) throw new Error('エントリが取得できませんでした');
+
+    const knownSet    = new Set(knownDates);
+    const newUpdates  = allUpdates.filter(u => !knownSet.has(u.date));
+
+    // 初回は全件を既知として保存（差分なしとして扱う）
+    const isFirstRun  = knownDates.length === 0;
+    const displayNew  = isFirstRun ? [] : newUpdates;
+
+    // 状態を保存
+    localStorage.setItem(STORAGE_KEY_KNOWN,   JSON.stringify(allUpdates.map(u => u.date)));
+    localStorage.setItem(STORAGE_KEY_CHECKED, today);
+
+    renderJmaResults(displayNew, allUpdates, today);
+
+    if (isFirstRun) {
+      setCheckerState('ok', `気象庁 確定値: 初回登録完了（${allUpdates.length} 件を既知として記録）`);
+    }
+
+  } catch (e) {
+    setCheckerState('error', `気象庁 確定値: チェック失敗（${e.message}）`);
+    document.getElementById('jma-checker-content').innerHTML =
+      `<div style="color:var(--text-dim)">取得できませんでした。ネットワーク接続を確認してください。<br>
+       手動確認: <a href="${JMA_UPDATE_URL}" target="_blank" style="color:var(--accent)">更新履歴ページ</a></div>`;
+    document.getElementById('jma-checker-body').classList.add('open');
+    document.getElementById('jma-checker-toggle').textContent = '▲';
+  }
+}
+
+// ページ読み込み完了後に実行
+window.addEventListener('DOMContentLoaded', () => {
+  // 少し遅らせてメインUIの描画を優先
+  setTimeout(checkJmaUpdates, 800);
+});
+
+
+function notify(msg, type = '') {
+  const el = document.getElementById('notif');
+  el.textContent = msg;
+  el.className = 'show ' + type;
+  clearTimeout(notifTimer);
+  notifTimer = setTimeout(() => el.className = '', 3000);
+}
+
+
+
+
+/* =============================================================
+   TAB SWITCHING
+============================================================= */
+function switchTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.header-tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.querySelectorAll('.header-tab-btn').forEach(b => {
+    if (b.textContent.toLowerCase().includes(name === 'viz' ? '可視化' : 'etas')) {
+      b.classList.add('active');
+    }
+  });
+  const sidebar = document.getElementById('filter-bar');
+  const tabbar  = document.querySelector('.tab-bar');
+  if (name === 'viz') {
+    sidebar.style.display = 'flex';
+    if (tabbar) tabbar.classList.remove('no-sidebar');
+  } else {
+    sidebar.style.display = 'none';
+    if (tabbar) tabbar.classList.add('no-sidebar');
+    if (name === 'etas') syncEtasTab();
+  }
+}
+
+/* =============================================================
+   ETAS JSON 読み込み
+============================================================= */
+document.getElementById('etas-json-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      renderEtasResults(data);
+    } catch(err) {
+      notify('JSONの解析に失敗しました: ' + err.message, 'error');
+    }
+  };
+  reader.readAsText(file);
+});
+
+/* =============================================================
+   DB 接続 & ETAS 実行
+============================================================= */
+
+/* =============================================================
+   VIZ タブ: DB からデータ取得
+============================================================= */
+
+/* テーブルのカラム一覧から各フィールドを自動推定して返す */
+function autoColMap(tblName) {
+  if (!_dbInfo) return {};
+  const tbl = _dbInfo.tables.find(t => t.name === tblName);
+  if (!tbl) return {};
+  const cols = tbl.columns.map(c => c.name);
+  const g = (...pats) => cols.find(c => pats.some(p => c.toLowerCase().includes(p))) ?? '';
+  return {
+    datetime : g('date','time','datetime','発生','日時'),
+    mag      : g('mag','magnitude','規模'),
+    lat      : g('lat','緯度'),
+    lon      : g('lon','lng','経度'),
+    depth    : g('dep','depth','深'),
+    place    : g('place','地名','震源地','region','name'),
+  };
+}
+
+function onVizTableChange() {
+  if (!_dbInfo) return;
+  const tbl = _dbInfo.tables.find(t => t.name === document.getElementById('viz-table').value);
+  if (!tbl) return;
+
+  // テーブル A のカラムを列セレクトに反映
+  const ids = ['viz-col-dt','viz-col-mag','viz-col-lat','viz-col-lon','viz-col-dep','viz-col-place'];
+  ids.forEach((id, i) => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = i >= 5 ? '<option value="">（省略可）</option>' : '';
+    tbl.columns.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.name; opt.textContent = `${c.name}  [${c.type}]`;
+      sel.appendChild(opt);
+    });
+  });
+
+  const cm = autoColMap(tbl.name);
+  document.getElementById('viz-col-dt').value    = cm.datetime;
+  document.getElementById('viz-col-mag').value   = cm.mag;
+  document.getElementById('viz-col-lat').value   = cm.lat;
+  document.getElementById('viz-col-lon').value   = cm.lon;
+  document.getElementById('viz-col-dep').value   = cm.depth;
+  document.getElementById('viz-col-place').value = cm.place;
+
+  // テーブル B プルダウンを更新（A と同じテーブルを除外）
+  const sel2    = document.getElementById('viz-table2');
+  const prevVal = sel2.value;
+  sel2.innerHTML = '';
+  _dbInfo.tables.forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t.name;
+    opt.textContent = `${t.name}  (約 ${t.rows.toLocaleString()} 件)`;
+    if (t.name === prevVal) opt.selected = true;
+    sel2.appendChild(opt);
+  });
+  // A と同じ値になっていたら別テーブルを自動選択
+  if (sel2.value === document.getElementById('viz-table').value) {
+    const other = _dbInfo.tables.find(t => t.name !== document.getElementById('viz-table').value);
+    if (other) sel2.value = other.name;
+  }
+}
+
+async function loadFromDB() {
+  const btn     = document.getElementById('viz-load-btn');
+  const label   = document.getElementById('viz-load-label');
+  const spinner = document.getElementById('viz-load-spinner');
+  const logBox  = document.getElementById('viz-load-log');
+
+  const tableA  = document.getElementById('viz-table').value;
+  const tableB  = document.getElementById('viz-table2').value;
+  const col_dt  = document.getElementById('viz-col-dt').value;
+  const col_mag = document.getElementById('viz-col-mag').value;
+  const col_lat = document.getElementById('viz-col-lat').value;
+  const col_lon = document.getElementById('viz-col-lon').value;
+  const col_dep = document.getElementById('viz-col-dep').value;
+
+  if (!tableA || !tableB) {
+    notify('テーブル A・B の両方を選択してください', 'error'); return;
+  }
+  if (tableA === tableB) {
+    notify('テーブル A と B に異なるテーブルを選択してください', 'error'); return;
+  }
+  if (!col_dt || !col_mag || !col_lat || !col_lon || !col_dep) {
+    notify('テーブル A の日時・M・緯度・経度・深さ列を設定してください', 'error'); return;
+  }
+
+  btn.disabled = true;
+  label.style.display = 'none'; spinner.style.display = 'inline';
+  logBox.style.display = 'none'; logBox.textContent = '';
+  notify(`${tableA} + ${tableB} を取得中...`, 'success');
+
+  const limitVal = parseInt(document.getElementById('viz-limit').value) || 0;
+
+  // 共通フィルタ（期間・空間）
+  const commonFilter = {
+    date_from : document.getElementById('viz-date-from').value || null,
+    date_to   : document.getElementById('viz-date-to').value  || null,
+    lat_min   : parseFloat(document.getElementById('viz-lat-min').value) || null,
+    lat_max   : parseFloat(document.getElementById('viz-lat-max').value) || null,
+    lon_min   : parseFloat(document.getElementById('viz-lon-min').value) || null,
+    lon_max   : parseFloat(document.getElementById('viz-lon-max').value) || null,
+    limit     : limitVal,
+  };
+
+  // テーブルごとに自身のカラム名を使ってペイロードを生成
+  const makePayload = (tblName, cm) => ({
+    table        : tblName,
+    col_datetime : cm.datetime,
+    col_mag      : cm.mag,
+    col_lat      : cm.lat,
+    col_lon      : cm.lon,
+    col_depth    : cm.depth,
+    col_place    : cm.place || null,
+    ...commonFilter,
+  });
+
+  // テーブル A はUIセレクトの値を優先（ユーザーが手動変更している可能性）
+  const cmA = {
+    datetime : col_dt,
+    mag      : col_mag,
+    lat      : col_lat,
+    lon      : col_lon,
+    depth    : col_dep,
+    place    : document.getElementById('viz-col-place').value || '',
+  };
+  // テーブル B は _dbInfo から独立して自動推定
+  const cmB = autoColMap(tableB);
+  if (!cmB.datetime || !cmB.mag || !cmB.lat || !cmB.lon || !cmB.depth) {
+    notify(`[${tableB}] 必須カラムを自動検出できませんでした。テーブル B のスキーマを確認してください`, 'error');
+    btn.disabled = false;
+    label.style.display = 'inline'; spinner.style.display = 'none';
+    return;
+  }
+
+  const fetchTable = async (payload) => {
+    const r    = await fetch('/api/viz/query', {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body   : JSON.stringify(payload),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(`[${payload.table}] ${data.error || `HTTP ${r.status}`}`);
+    return data.rows;
+  };
+
+  try {
+    // 常に両テーブルを並列フェッチ
+    const [rowsA, rowsB] = await Promise.all([
+      fetchTable(makePayload(tableA, cmA)),
+      fetchTable(makePayload(tableB, cmB)),
+    ]);
+
+    const toEvents = (rows, src) => rows.map(row => ({
+      dt    : new Date(row.dt),
+      lat   : row.lat,
+      lon   : row.lon,
+      depth : row.depth,
+      mag   : row.mag,
+      place : row.place || '',
+      source: src,
+    })).filter(d => !isNaN(d.dt) && !isNaN(d.lat) && !isNaN(d.lon));
+
+    rawData = [...toEvents(rowsA, tableA), ...toEvents(rowsB, tableB)].sort((a, b) => a.dt - b.dt);
+
+    // 直近期間は速報値で自動補完（共通ヘルパー）
+    const { dbCount, jmaAddCount } = await applyJMASupplementDB(
+      commonFilter.date_from, commonFilter.date_to, logBox
+    );
+
+    if (!rawData.length) { notify('有効データが0件です', 'error'); return; }
+
+    const countMsg = jmaAddCount > 0
+      ? `${rawData.length.toLocaleString()} 件 (DB: ${dbCount.toLocaleString()} + 速報値補完: +${jmaAddCount.toLocaleString()})`
+      : `${rawData.length.toLocaleString()} 件取得 (${tableA}: ${rowsA.length.toLocaleString()}, ${tableB}: ${rowsB.length.toLocaleString()})`;
+    notify(countMsg, 'success');
+
+    colMap = { datetime: col_dt, lat: col_lat, lon: col_lon, depth: col_dep, mag: col_mag };
+
+    _dataSource   = 'db';
+    _lastVizQuery = { ...makePayload(tableA, cmA), _tableB: tableB };
+
+    filteredData = [...rawData];
+    initFilterDefaults();
+    showDashboard();
+
+  } catch(e) {
+    logBox.textContent = e.message;
+    logBox.style.display = 'block';
+    notify('通信エラー: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    label.style.display = 'inline'; spinner.style.display = 'none';
+  }
+}
+
+// DB 接続確認・VIZパネル初期化（ページ読み込み時に1回だけ実行）
+async function initDB() {
+  const dot  = document.getElementById('viz-db-status-dot');
+  const text = document.getElementById('viz-db-status-text');
+  try {
+    const r = await fetch('/api/db/info', { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    _dbInfo = await r.json();
+
+    const sel  = document.getElementById('viz-table');
+    const sel2 = document.getElementById('viz-table2');
+    sel.innerHTML  = '';
+    sel2.innerHTML = '';
+    _dbInfo.tables.forEach(t => {
+      [sel, sel2].forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = t.name;
+        opt.textContent = `${t.name}  (約 ${t.rows.toLocaleString()} 件)`;
+        s.appendChild(opt);
+      });
+    });
+
+    // jmahypo → A、jmalist → B を自動選択（なければ先頭/2番目）
+    const names = _dbInfo.tables.map(t => t.name);
+    sel.value  = names.find(n => n === 'jmahypo') ?? names[0] ?? '';
+    sel2.value = names.find(n => n === 'jmalist') ?? names.find(n => n !== sel.value) ?? '';
+
+    dot.style.background = '#2ed573';
+    text.textContent     = `DB 接続済み (${_dbInfo.tables.length} テーブル)`;
+    text.style.color     = '#2ed573';
+
+    if (_dbInfo.tables.length) onVizTableChange();
+
+    // ─── 前1か月を自動設定して即ロード ───
+    const today = new Date();
+    const past  = new Date(today);
+    past.setDate(today.getDate() - 30);
+    const fmt = d => d.toISOString().slice(0, 10);
+    document.getElementById('viz-date-from').value = fmt(past);
+    document.getElementById('viz-date-to').value   = fmt(today);
+    // サイドバーにも同期
+    document.getElementById('sb-date-from').value  = fmt(past);
+    document.getElementById('sb-date-to').value    = fmt(today);
+
+    await loadFromDB();   // 自動取得
+
+  } catch(e) {
+    dot.style.background = '#ff4757';
+    text.textContent     = 'DB 未接続（CSV読み込みを使用）';
+    text.style.color     = 'var(--text-dim)';
+    console.info('[QuakeView] DB未接続:', e.message);
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => { initDB(); });
+
+/* =============================================================
+   サイドバー DB 再検索
+============================================================= */
+
+/** クイック日付ボタン: days=0 なら全期間（空欄） */
+function setQuickRange(days) {
+  const today = new Date();
+  const fmt = d => d.toISOString().slice(0, 10);
+  if (days === 0) {
+    document.getElementById('sb-date-from').value = '';
+    document.getElementById('sb-date-to').value   = '';
+  } else {
+    const past = new Date(today);
+    past.setDate(today.getDate() - days);
+    document.getElementById('sb-date-from').value = fmt(past);
+    document.getElementById('sb-date-to').value   = fmt(today);
+  }
+}
+
+/** サイドバーの期間指定で DB を再クエリ */
+async function reQueryDB() {
+  if (!_lastVizQuery) { notify('先にデータを読み込んでください', 'error'); return; }
+
+  const btn     = document.getElementById('sb-requery-btn');
+  const label   = document.getElementById('sb-requery-label');
+  const spinner = document.getElementById('sb-requery-spinner');
+  const logBox  = document.getElementById('sb-requery-log');
+
+  const dateFrom = document.getElementById('sb-date-from').value || null;
+  const dateTo   = document.getElementById('sb-date-to').value   || null;
+
+  btn.disabled = true;
+  label.style.display = 'none'; spinner.style.display = 'inline';
+  logBox.style.display = 'none'; logBox.textContent = '';
+
+  // _lastVizQuery をベースに期間だけ差し替え
+  const baseA = { ..._lastVizQuery, date_from: dateFrom, date_to: dateTo };
+  const tableB = _lastVizQuery._tableB;
+  const cmB    = autoColMap(tableB);
+
+  const baseB = {
+    table        : tableB,
+    col_datetime : cmB.datetime,
+    col_mag      : cmB.mag,
+    col_lat      : cmB.lat,
+    col_lon      : cmB.lon,
+    col_depth    : cmB.depth,
+    col_place    : cmB.place || null,
+    date_from    : dateFrom,
+    date_to      : dateTo,
+    limit        : _lastVizQuery.limit ?? 0,
+  };
+
+  // 内部の _tableB キーは API に送らない
+  const { _tableB: _ignored, ...payloadA } = baseA;
+
+  const fetchTable = async (payload) => {
+    const r = await fetch('/api/viz/query', {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body   : JSON.stringify(payload),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(`[${payload.table}] ${data.error || `HTTP ${r.status}`}`);
+    return data.rows;
+  };
+
+  let fetchOk = false;
+  let countMsg = '';
+  try {
+    const [rowsA, rowsB] = await Promise.all([
+      fetchTable(payloadA),
+      fetchTable(baseB),
+    ]);
+
+    const toEvents = (rows, src) => rows.map(row => ({
+      dt    : new Date(row.dt),
+      lat   : row.lat,
+      lon   : row.lon,
+      depth : row.depth,
+      mag   : row.mag,
+      place : row.place || '',
+      source: src,
+    })).filter(d => !isNaN(d.dt) && !isNaN(d.lat) && !isNaN(d.lon));
+
+    rawData = [...toEvents(rowsA, payloadA.table), ...toEvents(rowsB, tableB)].sort((a, b) => a.dt - b.dt);
+
+    // 直近期間は速報値で自動補完（共通ヘルパー）
+    const { dbCount, jmaAddCount } = await applyJMASupplementDB(
+      dateFrom, dateTo, logBox
+    );
+
+    if (!rawData.length) { notify('有効データが0件です（期間を広げてみてください）', 'error'); return; }
+
+    // _lastVizQuery の期間部分も更新
+    _lastVizQuery = { ...payloadA, _tableB: tableB };
+
+    countMsg = jmaAddCount > 0
+      ? `再取得完了: ${rawData.length.toLocaleString()} 件 (DB: ${dbCount.toLocaleString()} + 速報値補完: +${jmaAddCount.toLocaleString()})`
+      : `再取得完了: ${rawData.length.toLocaleString()} 件 (${payloadA.table}: ${rowsA.length.toLocaleString()}, ${tableB}: ${rowsB.length.toLocaleString()})`;
+    fetchOk = true;
+
+  } catch(e) {
+    logBox.textContent = e.message;
+    logBox.style.display = 'block';
+    notify('通信エラー: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    label.style.display = 'inline'; spinner.style.display = 'none';
+  }
+
+  // ネットワーク取得成功後にUI更新（try-catchの外で実行することでChart.jsエラーが通信エラーと混同されない）
+  if (fetchOk) {
+    filteredData = [...rawData];
+    initFilterDefaults();
+    updateAll();
+    notify(countMsg, 'success');
+    if (dateFrom) document.getElementById('f-date-start').value = dateFrom;
+    if (dateTo)   document.getElementById('f-date-end').value   = dateTo;
+  }
+}
+
+/* =============================================================
+   JMA 速報値震源 GeoJSON 取得
+============================================================= */
+
+// ① 純粋ロジック関数
+
+const JMA_HYPO_BASE = 'https://www.jma.go.jp/bosai/hypo/data';
+const JMA_SI_FELT   = new Set(['1','2','3','4','7','A','B','C','D']);
+
+// ① 1日分の GeoJSON を取得 ─ 直接 JMA → proxy フォールバック
+//    戻り値: GeoJSON オブジェクト、取得不可なら null
+async function fetchOneJMADay(yyyymmdd) {
+  const direct   = `${JMA_HYPO_BASE}/${yyyymmdd.slice(0,4)}/${yyyymmdd.slice(4,6)}/hypo${yyyymmdd}.geojson`;
+  const proxyUrl = `/proxy?url=${encodeURIComponent(direct)}`;
+
+  // ① まず直接 JMA アクセスを試みる（CORS対応済みなら高速）
+  try {
+    const r = await fetch(direct, { cache: 'no-cache' });
+    if (r.ok) return await r.json();
+  } catch { /* CORS or network error → fallthrough */ }
+
+  // ② proxy 経由でリトライ
+  try {
+    const r = await fetch(proxyUrl, { cache: 'no-cache' });
+    if (r.ok) return await r.json();
+    console.warn(`[JMA] ${yyyymmdd}: proxy HTTP ${r.status}`);
+  } catch (e) {
+    console.warn(`[JMA] ${yyyymmdd}: proxy error: ${e.message}`);
+  }
+  return null;
+}
+
+// ① GeoJSON → 生イベント配列（si フィールドを保持）
+function jmaParseGeoJSON(geo) {
+  return (geo.features || []).map(f => {
+    const p = f.properties || {};
+    const c = (f.geometry  || {}).coordinates || [];
+    return {
+      time : p.date  || '',
+      place: p.place || '',
+      lon  : c[0] != null ? c[0] : null,
+      lat  : c[1] != null ? c[1] : null,
+      dep  : isNaN(parseFloat(p.dep)) ? null : parseFloat(p.dep),
+      mag  : isNaN(parseFloat(p.mag)) ? null : parseFloat(p.mag),
+      si   : String(p.si || '').trim() || null,
+    };
+  });
+}
+
+// ① JMA 時刻文字列 → UNIX ms (JST)
+//    対応フォーマット:
+//      "YYYY/MM/DD.HH:MM"   ← bosai/hypo GeoJSON の現行フォーマット
+//      "YYYYMMDD.HHMMSS"    ← 旧フォーマット（スラッシュなし）
+function jmaEventTimeMs(raw) {
+  if (!raw) return NaN;
+  const s = raw.trim();
+
+  if (s.includes('/')) {
+    // 現行: "2026/05/11.00:05"
+    const dot  = s.indexOf('.');
+    const date = s.slice(0, dot).replace(/\//g, '-');  // "2026-05-11"
+    const time = s.slice(dot + 1);                      // "00:05"
+    return new Date(`${date}T${time}:00+09:00`).getTime();
+  }
+
+  // 旧: "20260511.000500"
+  const sep = s[8];
+  const d8  = s.slice(0, 8);
+  const t6  = (sep === '.' || sep === ' ')
+    ? s.slice(9, 15).padEnd(6, '0')
+    : s.slice(8, 14).padEnd(6, '0');
+  const iso = `${d8.slice(0,4)}-${d8.slice(4,6)}-${d8.slice(6,8)}`
+            + `T${t6.slice(0,2)}:${t6.slice(2,4)}:${t6.slice(4,6)}+09:00`;
+  return new Date(iso).getTime();
+}
+
+// ① データ出典ラベル
+function fmtSource(src) {
+  if (!src) return '—';
+  if (src === 'jma-hypo') return '気象庁速報値震源';
+  if (src === 'csv')      return 'CSVファイル';
+  return src + '（DB）';
+}
+
+// ① 生イベント → viz 共通フォーマット変換（si は落とす）
+function jmaToVizFormat(events) {
+  return events
+    .filter(e => e.lat !== null && e.lon !== null && e.mag !== null)
+    .map(e => {
+      const ms = jmaEventTimeMs(e.time);
+      if (isNaN(ms)) return null;
+      return { dt: new Date(ms), lat: e.lat, lon: e.lon, depth: e.dep ?? 0, mag: e.mag, place: e.place, source: 'jma-hypo' };
+    })
+    .filter(Boolean);
+}
+
+// ① "YYYY-MM-DD" 文字列を 1 日ずつ並べた配列を返す
+function jmaDateRange(fromStr, toStr) {
+  const dates = [];
+  let cur = fromStr;
+  while (cur <= toStr) {
+    dates.push(cur);
+    const d = new Date(cur + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + 1);
+    cur = d.toISOString().slice(0, 10);
+  }
+  return dates;
+}
+
+function jmaToCompact(dateStr) { return dateStr.replace(/-/g, ''); }
+
+// ① 期間内の速報値を逐次取得し、生イベント配列を返す
+//    onProgress(i, total, dateStr) は任意の進捗コールバック。副作用なし。
+//    取得失敗の日はスキップ（直接JMA → proxy フォールバック）
+async function fetchJMAHypoRaw(fromMs, toMs, onProgress) {
+  const toJSTDate = ms => new Date(ms + 9 * 3600_000).toISOString().slice(0, 10);
+  const dates     = jmaDateRange(toJSTDate(fromMs), toJSTDate(toMs));
+  const all       = [];
+  let   failCount = 0;
+
+  for (let i = 0; i < dates.length; i++) {
+    const dateStr = dates[i];
+    if (onProgress) onProgress(i + 1, dates.length, dateStr);
+
+    const geo = await fetchOneJMADay(jmaToCompact(dateStr));
+    if (!geo) { failCount++; continue; }
+
+    for (const e of jmaParseGeoJSON(geo)) {
+      const ms = jmaEventTimeMs(e.time);
+      if (!isNaN(ms) && ms >= fromMs && ms <= toMs) all.push(e);
+    }
+  }
+
+  if (failCount > 0) console.warn(`[JMA] ${failCount}/${dates.length} 日の取得に失敗`);
+  return all;
+}
+
+// ① DB確定値/暫定値と速報値の重複除去マージ（DB優先）
+//    同一震源の判定: 発生時刻差 < 60s かつ 緯度・経度差 < 0.1°
+function mergeDedup(dbEvents, jmaEvents) {
+  const added = jmaEvents.filter(jE => {
+    const ms = jE.dt.getTime();
+    return !dbEvents.some(dE =>
+      Math.abs(dE.dt.getTime() - ms) < 60_000 &&
+      Math.abs(dE.lat - jE.lat)     < 0.1    &&
+      Math.abs(dE.lon - jE.lon)     < 0.1
+    );
+  });
+  return [...dbEvents, ...added];
+}
+
+// ① DB検索後の速報値自動補完（rawData を直接更新）
+//    dateFromStr/dateToStr は "YYYY-MM-DD" 形式（type="date" の value）
+async function applyJMASupplementDB(dateFromStr, dateToStr, logBox) {
+  const dbCount       = rawData.length;
+  const AUTO_JMA_DAYS = 7;
+  const nowMs         = Date.now();
+  const cutMs         = nowMs - AUTO_JMA_DAYS * 86400_000;
+  // 終了日の翌日 UTC 0 時まで（その日の 23:59 JST を含む）
+  const reqToMs   = dateToStr   ? new Date(dateToStr).getTime()   + 86400_000 : nowMs;
+  const reqFromMs = dateFromStr ? new Date(dateFromStr).getTime() : 0;
+
+  if (reqToMs < cutMs) return { dbCount, jmaAddCount: 0 };
+
+  const jmaFromMs = Math.max(reqFromMs, cutMs);
+  const jmaToMs   = Math.min(reqToMs, nowMs);
+
+  logBox.style.color   = 'var(--text-dim)';
+  logBox.style.display = 'block';
+
+  const rawEvts = await fetchJMAHypoRaw(
+    jmaFromMs, jmaToMs,
+    (i, total) => { logBox.textContent = `速報値補完 ${i} / ${total} 日...`; }
+  );
+  const vizEvts = jmaToVizFormat(rawEvts);
+
+  logBox.style.display = 'none';
+  logBox.textContent   = '';
+
+  if (!vizEvts.length) return { dbCount, jmaAddCount: 0 };
+
+  rawData = mergeDedup(rawData, vizEvts).sort((a, b) => a.dt - b.dt);
+  return { dbCount, jmaAddCount: rawData.length - dbCount };
+}
+
+// ② 描画関数
+
+function setJmaLoadState(loading) {
+  document.getElementById('jma-load-btn').disabled          = loading;
+  document.getElementById('jma-load-label').style.display   = loading ? 'none' : '';
+  document.getElementById('jma-load-spinner').style.display = loading ? '' : 'none';
+}
+
+function showJmaError(msg) {
+  const box = document.getElementById('jma-load-log');
+  box.textContent   = msg;
+  box.style.display = msg ? 'block' : 'none';
+}
+
+// ③ エントリ関数
+
+async function loadFromJMAHypo() {
+  const fromVal = document.getElementById('jma-date-from').value;
+  const toVal   = document.getElementById('jma-date-to').value;
+  if (!fromVal || !toVal) { showJmaError('期間を指定してください'); return; }
+  if (fromVal > toVal)    { showJmaError('開始日時 ≤ 終了日時 にしてください'); return; }
+
+  const fromDate = fromVal.slice(0, 10);
+  const toDate   = toVal.slice(0, 10);
+  if (jmaDateRange(fromDate, toDate).length > 60) {
+    showJmaError('期間は最大60日までにしてください'); return;
+  }
+
+  // JST 基準で ms 変換（datetime-local の値は JST として扱う）
+  const fromMs = new Date(fromVal + ':00+09:00').getTime();
+  const toMs   = new Date(toVal   + ':59+09:00').getTime();
+  const magMin = parseFloat(document.getElementById('jma-mag-min').value);
+  const magMax = parseFloat(document.getElementById('jma-mag-max').value);
+  const siMode = document.getElementById('jma-si-filter').value;
+
+  setJmaLoadState(true);
+  showJmaError('');
+
+  const logBox = document.getElementById('jma-load-log');
+  logBox.style.color   = 'var(--text-dim)';
+  logBox.style.display = 'block';
+
+  // proxy 経由・逐次取得
+  const rawEvts = await fetchJMAHypoRaw(
+    fromMs, toMs,
+    (i, total) => { logBox.textContent = `取得中 ${i} / ${total} 日...`; }
+  );
+
+  logBox.style.display = 'none';
+  logBox.style.color   = '';
+  setJmaLoadState(false);
+
+  if (!rawEvts.length) {
+    showJmaError('データが取得できませんでした。ブラウザのコンソール(F12)でエラーを確認してください。');
+    return;
+  }
+
+  // フィルタ（M・震度）を生イベント段階で適用
+  const filtered = rawEvts.filter(e => {
+    if (!isNaN(magMin) && e.mag !== null && e.mag < magMin) return false;
+    if (!isNaN(magMax) && e.mag !== null && e.mag > magMax) return false;
+    const hasSI = e.si !== null && JMA_SI_FELT.has(e.si);
+    if (siMode === 'felt' && !hasSI) return false;
+    if (siMode === 'none' &&  hasSI) return false;
+    return true;
+  });
+
+  rawData = jmaToVizFormat(filtered);
+  rawData.sort((a, b) => a.dt - b.dt);
+
+  if (!rawData.length) {
+    showJmaError('フィルタ後の有効データが0件です');
+    return;
+  }
+
+  _dataSource   = 'jma-hypo';
+  _lastVizQuery = null;
+  colMap        = {};
+
+  filteredData = [...rawData];
+  initFilterDefaults();
+  showDashboard();
+  notify(`気象庁速報値震源: ${rawData.length.toLocaleString()} 件を読み込みました`, 'success');
+}
+
+/* =============================================================
+   ETAS タブ同期
+   rawData が存在する場合のみ解析パネルを表示する
+============================================================= */
+function syncEtasTab() {
+  const noData    = document.getElementById('etas-no-data');
+  const uploadArea = document.getElementById('etas-upload-area');
+  const results   = document.getElementById('etas-results');
+
+  if (!rawData.length) {
+    // データ未読込
+    noData.style.display     = 'block';
+    uploadArea.style.display = 'none';
+    // results は表示したままにしない
+    return;
+  }
+
+  noData.style.display     = 'none';
+  uploadArea.style.display = 'block';
+
+  // データセット情報を更新
+  const times  = rawData.map(d => d.dt.getTime());
+  const tMin   = new Date(Math.min(...times));
+  const tMax   = new Date(Math.max(...times));
+  const fmt    = d => `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;
+  const mags   = rawData.map(d => d.mag);
+  const maxMag = Math.max(...mags).toFixed(1);
+
+  const info = [
+    ['データソース', _dataSource === 'db'
+      ? (_lastVizQuery?.table || 'DB') + '（DB取得）'
+      : _dataSource === 'jma-hypo' ? '気象庁 速報値震源（GeoJSON）'
+      : 'CSVファイル'],
+    ['件数',  rawData.length.toLocaleString() + ' 件'],
+    ['期間',  fmt(tMin) + ' 〜 ' + fmt(tMax)],
+    ['最大M', maxMag],
+  ];
+  document.getElementById('etas-dataset-info').innerHTML =
+    info.map(([k,v]) =>
+      `<div><span style="color:var(--text-dim);font-size:0.72rem">${k}: </span>` +
+      `<span style="color:var(--accent)">${v}</span></div>`
+    ).join('');
+
+  // DB由来の場合は列マッピング確認を表示
+  const colConfirm = document.getElementById('etas-col-confirm');
+  const colBody    = document.getElementById('etas-col-confirm-body');
+  if (_dataSource === 'db' && _lastVizQuery) {
+    colConfirm.style.display = 'block';
+    const cols = [
+      ['日時', _lastVizQuery.col_datetime],
+      ['M',   _lastVizQuery.col_mag],
+      ['緯度', _lastVizQuery.col_lat],
+      ['経度', _lastVizQuery.col_lon],
+    ].filter(([,v]) => v);
+    colBody.innerHTML = cols.map(([k,v]) =>
+      `<span style="background:var(--bg);border:1px solid var(--border);padding:2px 8px;border-radius:2px">` +
+      `<span style="color:var(--text-dim)">${k}:</span> <span style="color:var(--accent3)">${v}</span></span>`
+    ).join('');
+  } else {
+    colConfirm.style.display = 'none';
+  }
+}
+
+/* =============================================================
+   ETAS 解析実行（読み込み済みデータを使用）
+============================================================= */
+async function runETASFromLoadedData() {
+  const btn     = document.getElementById('etas-run-btn');
+  const label   = document.getElementById('etas-run-label');
+  const spinner = document.getElementById('etas-run-spinner');
+  const logBox  = document.getElementById('etas-run-log');
+
+  if (!rawData.length) { notify('データが読み込まれていません', 'error'); return; }
+
+  btn.disabled          = true;
+  label.style.display   = 'none';
+  spinner.style.display = 'inline';
+  logBox.style.display  = 'none';
+  logBox.textContent    = '';
+
+  const etasParams = {
+    mc      : parseFloat(document.getElementById('etas-mc').value)      || null,
+    method  : document.getElementById('etas-method').value              || null,
+    twindow : parseFloat(document.getElementById('etas-twindow').value) || null,
+  };
+
+  let payload;
+
+  if (_dataSource === 'db' && _lastVizQuery) {
+    // DB由来: 同じクエリパラメータでサーバが再取得
+    payload = { ..._lastVizQuery, ...etasParams };
+    // viz 用の col_depth → etas 用の col_lat/col_lon はそのまま使える
+    // ただし col_depth は ETAS では不要（etas_analysis.py は使わない）
+  } else {
+    // CSV由来: rawData をインラインCSVとしてサーバに送る
+    const col_dt  = colMap.datetime || 'datetime';
+    const col_mag = colMap.mag      || 'magnitude';
+    const col_lat = colMap.lat      || null;
+    const col_lon = colMap.lon      || null;
+
+    // CSV文字列を生成
+    const csvCols = [col_dt, col_mag];
+    if (col_lat) csvCols.push(col_lat);
+    if (col_lon) csvCols.push(col_lon);
+
+    const lines = [csvCols.join(',')];
+    rawData.forEach(d => {
+      const vals = [
+        d.dt.toISOString().replace('T',' ').slice(0,19),
+        d.mag,
+      ];
+      if (col_lat) vals.push(d.lat);
+      if (col_lon) vals.push(d.lon);
+      lines.push(vals.join(','));
+    });
+
+    payload = {
+      inline_csv   : lines.join('\n'),
+      col_datetime : col_dt,
+      col_mag,
+      col_lat      : col_lat || null,
+      col_lon      : col_lon || null,
+      ...etasParams,
+    };
+  }
+
+  try {
+    notify('ETAS解析を実行中... しばらくお待ちください', 'success');
+    const r = await fetch('/api/etas/run', {
+      method  : 'POST',
+      headers : { 'Content-Type': 'application/json' },
+      body    : JSON.stringify(payload),
+    });
+    const data = await r.json();
+
+    if (!r.ok) {
+      logBox.textContent   = data.error + (data.trace ? '\n\n' + data.trace : '');
+      logBox.style.display = 'block';
+      notify(`解析失敗 (${r.status})`, 'error');
+      return;
+    }
+
+    if (data._log) {
+      logBox.textContent   = data._log;
+      logBox.style.display = 'block';
+    }
+
+    renderEtasResults(data);
+    notify('ETAS解析が完了しました', 'success');
+
+  } catch(e) {
+    notify(`通信エラー: ${e.message}`, 'error');
+    logBox.textContent   = e.message;
+    logBox.style.display = 'block';
+  } finally {
+    btn.disabled          = false;
+    label.style.display   = 'inline';
+    spinner.style.display = 'none';
+  }
+}
+
+/* =============================================================
+   ETAS 結果レンダリング
+============================================================= */
+const PARAM_LABELS = {
+  mu:    { sym: 'μ', desc: '背景レート' },
+  K:     { sym: 'K', desc: '余震生産性' },
+  alpha: { sym: 'α', desc: 'M依存性' },
+  c:     { sym: 'c', desc: '時定数(日)' },
+  p:     { sym: 'p', desc: 'p値' }
+};
+
+function renderEtasResults(d) {
+  document.getElementById('etas-upload-area').style.display = 'none';
+  document.getElementById('etas-results').style.display = 'block';
+
+  // ── メタ情報 ──
+  // 異常性モニタリングパネルを描画（JSONに anomaly キーがある場合）
+  if (d.anomaly) renderAnomalyChart(d.anomaly, d.meta?.t0);
+
+  const meta = d.meta;
+  document.getElementById('etas-meta').innerHTML = [
+    ['ファイル', meta.csv],
+    ['開始時刻', meta.t0.slice(0,19)],
+    ['総イベント数', meta.n_total.toLocaleString()],
+    ['解析使用数 (≥Mc)', meta.n_used.toLocaleString()],
+    ['Mc', meta.Mc.toFixed(1)],
+    ['b値 (Aki MLE)', meta.b_value != null ? meta.b_value.toFixed(3) : 'N/A'],
+    ['観測期間', meta.T.toFixed(1) + ' 日'],
+    ['生成日時', meta.generated.slice(0,19)]
+  ].map(([k,v]) => `<div><span style="color:var(--text-dim)">${k}: </span><span style="color:var(--accent)">${v}</span></div>`).join('');
+
+  // ── パラメータカード ──
+  const pg = document.getElementById('param-grid');
+  pg.innerHTML = Object.entries(d.params).map(([name, v]) => {
+    const lbl = PARAM_LABELS[name] || { sym: name, desc: '' };
+    const ciOk = v.ci_lower != null && v.ci_upper != null;
+    const ciStr = ciOk
+      ? `[${v.ci_lower.toFixed(4)}, ${v.ci_upper.toFixed(4)}]`
+      : '(CI計算不可)';
+    return `<div class="param-card">
+      <div class="param-name">${lbl.sym}</div>
+      <div class="param-value">${v.estimate.toFixed(4)}</div>
+      <div class="param-ci">${ciStr}</div>
+      <div style="font-size:0.62rem;color:var(--text-dim);margin-top:4px">${lbl.desc}</div>
+    </div>`;
+  }).join('');
+
+  // ── AIC比較 ──
+  const aic = d.aic;
+  const tbody = document.getElementById('aic-tbody');
+  tbody.innerHTML = [
+    ['ETAS', aic.etas.n_params, aic.etas.logL.toFixed(2), aic.etas.AIC.toFixed(2)],
+    ['定常ポアソン', aic.poisson.n_params, aic.poisson.logL.toFixed(2), aic.poisson.AIC.toFixed(2)]
+  ].map(([m,k,l,a]) => `<tr><td style="color:var(--accent)">${m}</td><td>${k}</td><td>${l}</td><td style="color:var(--accent3)">${a}</td></tr>`).join('');
+
+  const daic = aic.delta_aic;
+  let verdict, vcolor;
+  if (daic > 10) { verdict = `ΔAIC = ${daic.toFixed(1)} → ETASモデルが統計的に有意に優れています`; vcolor = '#2ed573'; }
+  else if (daic > 2) { verdict = `ΔAIC = ${daic.toFixed(1)} → ETASモデルがやや優れています`; vcolor = '#ffa502'; }
+  else { verdict = `ΔAIC = ${daic.toFixed(1)} → 両モデルに有意差なし`; vcolor = '#ff4757'; }
+  document.getElementById('aic-verdict').innerHTML = `<span style="color:${vcolor}">${verdict}</span>`;
+
+  // ── KS テスト ──
+  const res = d.residuals;
+  const ksOk  = res.ks_pvalue > 0.05;
+  // Δτ指数分布テスト（Ogata 1988 の核心的検定）
+  const hasDtau = res.ks_dtau_pvalue != null && res.ks_dtau_stat != null;
+  const ksOk2 = hasDtau && res.ks_dtau_pvalue > 0.05;
+  document.getElementById('ks-result').innerHTML = `
+    <div style="margin-bottom:8px;font-size:0.72rem;color:var(--text-dim)">
+      τ/N ～ U[0,1]（変換時間の一様性）
+    </div>
+    <div style="margin-bottom:6px">
+      KS統計量 D = <span style="color:var(--accent)">${res.ks_stat.toFixed(4)}</span>　
+      p値 = <span style="color:var(--accent)">${res.ks_pvalue.toFixed(4)}</span>
+    </div>
+    <span class="ks-badge" style="background:${ksOk?'#2ed573':'#ff4757'};color:${ksOk?'#000':'#fff'}">
+      ${ksOk ? '✓ 適合良好 (p > 0.05)' : '✗ 適合要確認 (p ≤ 0.05)'}
+    </span>
+    ${hasDtau ? `
+    <div style="margin-top:14px;margin-bottom:8px;font-size:0.72rem;color:var(--text-dim)">
+      Δτ ～ Exp(1)（変換間隔の指数分布性 — Ogata 1988 の核心検定）
+    </div>
+    <div style="margin-bottom:6px">
+      KS統計量 D = <span style="color:var(--accent)">${res.ks_dtau_stat.toFixed(4)}</span>　
+      p値 = <span style="color:var(--accent)">${res.ks_dtau_pvalue.toFixed(4)}</span>
+    </div>
+    <span class="ks-badge" style="background:${ksOk2?'#2ed573':'#ff4757'};color:${ksOk2?'#000':'#fff'}">
+      ${ksOk2 ? '✓ 適合良好 (p > 0.05)' : '✗ 適合要確認 (p ≤ 0.05)'}
+    </span>` : ''}`;
+
+  // KSグラフ（変換時間 vs 一様分布）
+  renderKsChart(res.tau_norm);
+
+  // ── λ(t) グラフ ──
+  renderLambdaChart(d.lambda);
+
+  // ── 積分グラフ ──
+  renderLambdaIntChart(d.residuals.tau, d.event_times);  // tau = 解析解の ∫λdt（各イベント時刻）
+
+  // ── 空間パラメータ ──
+  if (d.spatial) {
+    document.getElementById('spatial-panel').style.display = 'block';
+    document.getElementById('spatial-content').innerHTML = `
+      <div style="display:flex;gap:32px">
+        <div><span style="color:var(--text-dim)">σ (空間広がり): </span><span style="color:var(--accent)">${d.spatial.sigma.estimate.toFixed(4)}°</span></div>
+        <div><span style="color:var(--text-dim)">γ (M依存空間): </span><span style="color:var(--accent)">${d.spatial.gamma.estimate.toFixed(4)}</span></div>
+        <div><span style="color:var(--text-dim)">空間log L: </span><span style="color:var(--accent)">${d.spatial.logL_spatial.toFixed(2)}</span></div>
+      </div>`;
+  }
+
+  notify('ETAS解析結果を読み込みました', 'success');
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CORNER PLOT
+   共分散行列から解析的に信頼楕円を描画（乱数サンプリング不要）。
+   対角セル: 周辺ガウス分布 (±3σ)
+   下三角セル: 1σ・2σ 信頼楕円（χ²(2) の 68%・95% 分位点）
+═══════════════════════════════════════════════════════════════ */
+
+/* ── KS グラフ（実測 CDF vs 一様分布）── */
+function renderKsChart(tau_norm) {
+  const sorted = [...tau_norm].sort((a,b)=>a-b);
+  const n = sorted.length;
+  const empirical = sorted.map((v,i) => ({ x: v, y: (i+1)/n }));
+  const ideal     = [{ x:0, y:0 }, { x:1, y:1 }];
+  makeChart('chart-ks', {
+    type: 'scatter',
+    data: {
+      datasets: [
+        { label: '実測CDF', data: empirical, pointRadius: 1.5, pointBackgroundColor: '#00d4ff', showLine: true, borderColor: '#00d4ff', borderWidth: 1.5 },
+        { label: '理想(一様)', data: ideal, pointRadius: 0, showLine: true, borderColor: '#ffa502', borderWidth: 1.5, borderDash: [4,4] }
+      ]
+    },
+    options: {
+      ...chartDefaults,
+      plugins: { ...chartDefaults.plugins, legend: { display: true, labels: { color: '#4a6080', font: { family: 'Share Tech Mono', size: 9 }, boxWidth: 20 } } },
+      scales: {
+        x: { title: { display: true, text: 'τ / N', color: '#4a6080', font: { family: 'Share Tech Mono', size: 9 } }, ticks: { color: '#4a6080', font: { family: 'Share Tech Mono', size: 9 } }, grid: { color: '#1a2540' } },
+        y: { title: { display: true, text: 'CDF', color: '#4a6080', font: { family: 'Share Tech Mono', size: 9 } }, ticks: { color: '#4a6080', font: { family: 'Share Tech Mono', size: 9 } }, grid: { color: '#1a2540' } }
+      }
+    }
+  });
+}
+
+/* ── λ(t) グラフ ── */
+function renderLambdaChart(lam) {
+  // λ(t) のみ描画（観測イベントなし）
+  const monoFont = { family: 'Share Tech Mono', size: 9 };
+  const lamData  = lam.t.map((t, i) => ({ x: t, y: lam.vals[i] }));
+
+  makeChart('chart-lambda', {
+    type: 'scatter',
+    data: {
+      datasets: [{
+        label: 'λ(t)',
+        data: lamData,
+        showLine: true,
+        borderColor: '#00d4ff',
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: false,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0d1420', borderColor: '#1a2540', borderWidth: 1,
+          titleColor: '#00d4ff', bodyColor: '#c8d8f0',
+          titleFont: monoFont, bodyFont: monoFont,
+          callbacks: {
+            label: ctx => 'λ = ' + ctx.parsed.y.toFixed(4) + '  t = ' + ctx.parsed.x.toFixed(2) + '日'
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'linear', min: 0,
+          title: { display: true, text: '経過日数', color: '#4a6080', font: monoFont },
+          ticks: { color: '#4a6080', font: monoFont },
+          grid: { color: '#1a2540' }
+        },
+        y: {
+          type: 'logarithmic',
+          title: { display: true, text: 'λ(t)  [events/day]', color: '#4a6080', font: monoFont },
+          ticks: {
+            color: '#4a6080', font: monoFont,
+            callback: v => [0.001,0.01,0.1,1,2,5,10,20,50,100,200,500,1000,5000].includes(v) ? v : ''
+          },
+          grid: { color: '#1a2540' }
+        }
+      }
+    }
+  });
+}
+
+/* ── ∫λ(t)dt と観測累積数の比較グラフ ── */
+function renderLambdaIntChart(tau, evTimes) {
+  /*
+   * tau[i] = ∫₀^{tᵢ} λ(s)ds  ← residual_analysis が解析解で計算した値
+   *   （台形積分ではなく大森則の不定積分の解析解を使うため正確）
+   * evTimes[i] = i 番目のイベントの経過日数（Mc 以上のみ）
+   * → tau と evTimes は同じ長さ・同じ順序で対応している
+   */
+  const monoFont = { family: 'Share Tech Mono', size: 9 };
+
+  // ── モデル予測の累積強度（解析解）──
+  // tau[i] を各イベント時刻にプロット
+  const modelData = evTimes.map((t, i) => ({ x: t, y: tau[i] }));
+
+  // ── 観測累積数（階段関数）──
+  const T_end  = evTimes[evTimes.length - 1];
+  const sorted = evTimes.filter(t => t >= 0 && t <= T_end).sort((a, b) => a - b);
+  // 階段関数: 各イベント時刻でカウントが+1
+  const obsData = [];
+  sorted.forEach((t, i) => {
+    // 直前の値を同じxに打って階段を作る
+    if (i > 0) obsData.push({ x: t, y: i });
+    obsData.push({ x: t, y: i + 1 });
+  });
+  // t=0 の始点と t=T_end の終点を追加
+  if (obsData.length > 0) {
+    obsData.unshift({ x: evTimes[0] || 0, y: 0 });
+    obsData.push({ x: T_end, y: sorted.length });
+  }
+
+  makeChart('chart-lambda-int', {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {
+          label: '∫λ(t)dt（ETASモデル予測）',
+          data: modelData,
+          showLine: true,
+          borderColor: '#00d4ff',
+          borderWidth: 2,
+          pointRadius: 0,
+          fill: false,
+          order: 1
+        },
+        {
+          label: '観測累積数',
+          data: obsData,
+          showLine: true,
+          borderColor: 'rgba(255,255,255,0.75)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: false,
+          order: 2
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: true,
+          labels: { color: '#4a6080', font: monoFont, boxWidth: 14, usePointStyle: true }
+        },
+        tooltip: {
+          backgroundColor: '#0d1420', borderColor: '#1a2540', borderWidth: 1,
+          titleColor: '#00d4ff', bodyColor: '#c8d8f0',
+          titleFont: monoFont, bodyFont: monoFont,
+          callbacks: {
+            label: ctx => {
+              const lab = ctx.dataset.label;
+              return `${lab}: ${ctx.parsed.y.toFixed(1)}  t = ${ctx.parsed.x.toFixed(2)}日`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'linear', min: 0,
+          title: { display: true, text: '経過日数', color: '#4a6080', font: monoFont },
+          ticks: { color: '#4a6080', font: monoFont },
+          grid: { color: '#1a2540' }
+        },
+        y: {
+          type: 'linear',
+          title: { display: true, text: '累積イベント数', color: '#4a6080', font: monoFont },
+          ticks: { color: '#4a6080', font: monoFont },
+          grid: { color: '#1a2540' }
+        }
+      }
+    }
+  });
+}
+
+
+/* ─────────────────────────────────────────────
+   ANOMALY MONITORING  （JSONから描画）
+   d.anomaly = etas_analysis.py の anomaly_analysis() 出力
+───────────────────────────────────────────── */
+function renderAnomalyChart(an, t0Str) {
+  /*
+   * times_mc はデータ先頭からの「経過日数」（Python側で変換済み）。
+   * 横軸は経過日数のまま表示し、ツールチップで t0Str + 経過日数から
+   * 絶対日時を再構築する。
+   */
+  const panel = document.getElementById('anomaly-panel');
+  if (!an || !an.times_mc || !an.times_mc.length) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+
+  const THRESH     = an.thresh   ?? 0.001;
+  const lookback   = an.lookback ?? 20;
+  const Mc         = an.Mc;
+  const logThresh  = -Math.log10(THRESH);
+  const monoFont   = { family: 'Share Tech Mono', size: 9 };
+
+  // times_mc はすでに経過日数（t0 = 0 が先頭イベント）
+  const tDays    = an.times_mc;           // [0.0, 0.3, 1.2, ...]
+  const spanDays = tDays[tDays.length - 1];
+
+  // 絶対日時への変換（t0Str が渡された場合のみ）
+  const t0Ms  = t0Str ? new Date(t0Str.replace(' ', 'T')).getTime() : null;
+  const toAbs = v => t0Ms != null ? new Date(t0Ms + v * 86400000) : null;
+  const _d2   = n => String(n).padStart(2, '0');
+  const fmtAbs = d => d
+    ? `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${_d2(d.getHours())}:${_d2(d.getMinutes())}`
+    : null;
+
+  // 横軸ラベル: 経過日数を表示
+  const tickDays = spanDays <= 7 ? 1 : spanDays <= 30 ? 3 : spanDays <= 180 ? 7 : 30;
+
+  // 通常・異常の点を分類
+  const normalPts   = [];
+  const anomalousPts = [];
+  an.log_scores.forEach((ls, i) => {
+    if (ls == null) return;
+    const pt = { x: tDays[i], y: ls, absDate: toAbs(tDays[i]) };
+    if (an.anomalous_idx.includes(i)) anomalousPts.push(pt);
+    else                               normalPts.push(pt);
+  });
+
+  // パラメータバー
+  document.getElementById('anomaly-count').textContent =
+    `異常検出: ${an.n_anomalous} 件 / Mc+ ${an.times_mc.length} 件`;
+  document.getElementById('anomaly-param-bar').innerHTML =
+    `Mc = <b style="color:var(--accent)">${Mc.toFixed(1)}</b>　` +
+    `lookback = ${lookback}　閾値 p &lt; ${(THRESH*100).toFixed(1)}%　` +
+    `<span style="color:#2ed573">📊 etas_analysis.py の出力から取得</span>`;
+
+  // 閾値ライン プラグイン
+  const threshPlugin = {
+    id: 'anomalyThresh',
+    afterDatasetsDraw(chart) {
+      const { ctx, scales: { x, y }, chartArea } = chart;
+      const yPx = y.getPixelForValue(logThresh);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,71,87,0.7)';
+      ctx.lineWidth   = 1.5;
+      ctx.setLineDash([6, 3]);
+      ctx.beginPath(); ctx.moveTo(chartArea.left, yPx); ctx.lineTo(chartArea.right, yPx); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle   = 'rgba(255,71,87,0.85)';
+      ctx.font        = '9px Share Tech Mono';
+      ctx.textAlign   = 'right';
+      ctx.fillText(`p = ${(THRESH*100).toFixed(1)}%  (異常判定閾値)`, chartArea.right - 4, yPx - 5);
+      ctx.restore();
+    }
+  };
+
+  makeChart('chart-anomaly', {
+    type: 'scatter',
+    plugins: [threshPlugin],
+    data: {
+      datasets: [
+        {
+          label: '通常',
+          data: normalPts,
+          pointRadius: 3,
+          pointBackgroundColor: 'rgba(0,212,255,0.45)',
+          pointBorderWidth: 0,
+          showLine: false
+        },
+        {
+          label: `異常 (p < ${(THRESH*100).toFixed(1)}%)`,
+          data: anomalousPts,
+          pointRadius: 6,
+          pointBackgroundColor: 'rgba(255,71,87,0.85)',
+          pointBorderColor: '#ff4757',
+          pointBorderWidth: 1.5,
+          showLine: false
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, labels: { color: '#c8d8f0', font: monoFont, usePointStyle: true, boxWidth: 10 } },
+        tooltip: {
+          backgroundColor: '#0d1420', borderColor: '#1a2540', borderWidth: 1,
+          titleColor: '#00d4ff', bodyColor: '#c8d8f0',
+          titleFont: monoFont, bodyFont: monoFont,
+          callbacks: {
+            label: ctx => {
+              const logP = ctx.parsed.y;
+              const pct  = (Math.pow(10, -logP) * 100).toFixed(4);
+              const abs  = ctx.raw.absDate ? '  ' + fmtAbs(ctx.raw.absDate) : '';
+              return ` −log₁₀(p) = ${logP.toFixed(2)}   p = ${pct}%${abs}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'linear', min: 0, max: spanDays,
+          title: { display: true, text: '経過日数 [day]', color: '#4a6080', font: monoFont },
+          ticks: { color: '#4a6080', font: monoFont, stepSize: tickDays, maxRotation: 0 },
+          grid: { color: '#1a2540' }
+        },
+        y: {
+          min: 0,
+          title: { display: true, text: '−log₁₀(p)', color: '#4a6080', font: monoFont },
+          ticks: { color: '#4a6080', font: monoFont },
+          grid: { color: '#1a2540' }
+        }
+      }
+    }
+  });
+
+  // 異常イベントリスト
+  const listEl = document.getElementById('anomaly-list');
+  if (an.n_anomalous === 0) {
+    listEl.innerHTML = '<div style="padding:12px 10px;color:var(--text-dim);font-family:var(--mono);font-size:0.75rem">異常な活発化は検出されませんでした</div>';
+    return;
+  }
+  // anomalous_idx を score 昇順でソート
+  const sortedIdx = [...an.anomalous_idx].sort((a, b) => an.scores[a] - an.scores[b]);
+  const header = '<div class="anomaly-list-header"><span>経過日数</span><span>M</span><span>p 値</span><span>−log₁₀(p)</span></div>';
+  const rows = sortedIdx.map(i => {
+    const pct = (an.scores[i] * 100).toFixed(5);
+    return `<div class="anomaly-item">
+      <span class="anomaly-dt">${(() => { const a = toAbs(tDays[i]); return a ? fmtAbs(a) : tDays[i].toFixed(2)+'日'; })()}</span>
+      <span class="anomaly-mag">M${an.mags_mc[i].toFixed(1)}</span>
+      <span class="anomaly-p">${pct}%</span>
+      <span class="anomaly-logscore">${an.log_scores[i].toFixed(2)}</span>
+    </div>`;
+  }).join('');
+  listEl.innerHTML = header + rows;
+}
+
+/* =============================================================
+   初期化
+============================================================= */
+(function initJmaDateInputs() {
+  const now = new Date(Date.now() + 9 * 3600 * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  const todayJST = `${now.getUTCFullYear()}-${pad(now.getUTCMonth()+1)}-${pad(now.getUTCDate())}`;
+  const nowJST   = `${todayJST}T${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}`;
+  document.getElementById('jma-date-from').value = `${todayJST}T00:00`;
+  document.getElementById('jma-date-to').value   = nowJST;
+})();
+
+</script>
+</body>
+</html>

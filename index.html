@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QuakeView — Seismic Analysis Suite</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+
+    :root {
+      --bg:        #0a0c10;
+      --bg2:       #0f1318;
+      --bg3:       #141a22;
+      --cyan:      #00e5ff;
+      --cyan-dim:  #007a8a;
+      --orange:    #ff6e1f;
+      --orange-dim:#7a3610;
+      --green:     #39ff14;
+      --text:      #c8d8e8;
+      --text-dim:  #5a7080;
+      --border:    #1e2d3a;
+      --mono:      'Share Tech Mono', monospace;
+      --display:   'Orbitron', sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      overflow-x: hidden;
+    }
+
+    /* ── CANVAS BACKGROUND ── */
+    #seismic-canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      opacity: 0.18;
+    }
+
+    /* ── SCANLINE OVERLAY ── */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.08) 2px,
+        rgba(0,0,0,0.08) 4px
+      );
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    /* ── LAYOUT ── */
+    .page {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 24px 80px;
+    }
+
+    /* ── HEADER ── */
+    header {
+      width: 100%;
+      max-width: 960px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 28px 0 0;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 20px;
+      margin-bottom: 0;
+    }
+
+    .logo-mark {
+      width: 42px;
+      height: 42px;
+      flex-shrink: 0;
+    }
+
+    .logo-text {
+      font-family: var(--display);
+      font-size: 1.5rem;
+      font-weight: 900;
+      letter-spacing: 0.12em;
+    }
+    .logo-text span:first-child { color: var(--cyan); }
+    .logo-text span:last-child  { color: var(--orange); }
+
+    .header-meta {
+      margin-left: auto;
+      text-align: right;
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      line-height: 1.7;
+    }
+    .header-meta .live-dot {
+      display: inline-block;
+      width: 7px; height: 7px;
+      background: var(--green);
+      border-radius: 50%;
+      margin-right: 5px;
+      animation: blink 1.4s ease-in-out infinite;
+      box-shadow: 0 0 6px var(--green);
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+    /* ── HERO ── */
+    .hero {
+      width: 100%;
+      max-width: 960px;
+      padding: 64px 0 52px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .hero-label {
+      font-size: 0.68rem;
+      letter-spacing: 0.25em;
+      color: var(--orange);
+      text-transform: uppercase;
+    }
+
+    .hero-title {
+      font-family: var(--display);
+      font-size: clamp(2.2rem, 6vw, 4rem);
+      font-weight: 900;
+      line-height: 1.05;
+      color: #fff;
+      text-shadow: 0 0 40px rgba(0,229,255,0.15);
+    }
+    .hero-title em {
+      font-style: normal;
+      color: var(--cyan);
+    }
+
+    .hero-desc {
+      max-width: 560px;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      line-height: 1.8;
+    }
+
+    .hero-stats {
+      display: flex;
+      gap: 40px;
+      margin-top: 12px;
+    }
+    .stat {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .stat-value {
+      font-family: var(--display);
+      font-size: 1.5rem;
+      color: var(--cyan);
+    }
+    .stat-label {
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    /* ── TOOL GRID ── */
+    .section-label {
+      width: 100%;
+      max-width: 960px;
+      margin: 48px 0 20px;
+      font-size: 0.68rem;
+      letter-spacing: 0.2em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .section-label::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    .tool-grid {
+      width: 100%;
+      max-width: 960px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+    }
+
+    /* ── TOOL CARD ── */
+    .card {
+      position: relative;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 28px 26px 24px;
+      text-decoration: none;
+      color: inherit;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow: hidden;
+      transition: border-color 0.25s, transform 0.2s, box-shadow 0.25s;
+      cursor: pointer;
+    }
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--accent-color, var(--cyan));
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.3s ease;
+    }
+    .card:hover {
+      border-color: var(--accent-color, var(--cyan));
+      transform: translateY(-3px);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5), 0 0 24px var(--accent-glow, rgba(0,229,255,0.08));
+    }
+    .card:hover::before { transform: scaleX(1); }
+
+    .card--cyan  { --accent-color: var(--cyan);   --accent-glow: rgba(0,229,255,0.1); }
+    .card--orange{ --accent-color: var(--orange);  --accent-glow: rgba(255,110,31,0.1); }
+    .card--green { --accent-color: var(--green);   --accent-glow: rgba(57,255,20,0.08); }
+
+    .card-icon {
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card-icon svg { width: 100%; height: 100%; }
+
+    .card-tag {
+      position: absolute;
+      top: 16px; right: 16px;
+      font-size: 0.6rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--accent-color, var(--cyan));
+      border: 1px solid var(--accent-color, var(--cyan));
+      padding: 2px 7px;
+      border-radius: 2px;
+      opacity: 0.7;
+    }
+
+    .card-title {
+      font-family: var(--display);
+      font-size: 1.0rem;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 0.04em;
+    }
+
+    .card-desc {
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      line-height: 1.7;
+      flex: 1;
+    }
+
+    .card-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.68rem;
+      color: var(--accent-color, var(--cyan));
+      margin-top: 4px;
+      opacity: 0.8;
+    }
+    .card-meta svg { width: 12px; height: 12px; flex-shrink: 0; }
+
+    /* ── FOOTER ── */
+    footer {
+      width: 100%;
+      max-width: 960px;
+      margin-top: 72px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.65rem;
+      color: var(--text-dim);
+    }
+    footer a { color: var(--cyan-dim); text-decoration: none; }
+    footer a:hover { color: var(--cyan); }
+
+    /* ── SEISMIC WAVE CANVAS ── */
+    /* drawn by JS below */
+
+    /* ── MOBILE ── */
+    @media (max-width: 540px) {
+      .page { padding: 0 14px 60px; }
+      header {
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 18px 0 14px;
+      }
+      .header-meta { display: none; }
+      .hero { padding: 36px 0 28px; gap: 12px; }
+      .hero-title { font-size: clamp(1.8rem, 8vw, 3rem); }
+      .hero-stats { gap: 22px; flex-wrap: wrap; }
+      .stat-value { font-size: 1.2rem; }
+      .section-label { margin: 32px 0 14px; }
+      .tool-grid { grid-template-columns: 1fr; gap: 12px; }
+      .card { padding: 20px 18px 18px; }
+      footer { flex-direction: column; gap: 8px; margin-top: 48px; }
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="seismic-canvas"></canvas>
+
+<div class="page">
+
+  <!-- HEADER -->
+  <header>
+    <!-- Logo SVG -->
+    <svg class="logo-mark" viewBox="0 0 42 42" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="42" height="42" rx="6" fill="#0f1318"/>
+      <polyline points="2,21 8,21 11,12 14,30 17,18 20,24 23,8 26,34 29,21 32,21 40,21"
+        stroke="#00e5ff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" fill="none"/>
+    </svg>
+    <div class="logo-text">
+      <span>Quake</span><span>View</span>
+    </div>
+    <div class="header-meta">
+      <div>Data Source: JMA · Early-est</div>
+    </div>
+  </header>
+
+  <!-- PERSONAL DASHBOARD -->
+  <div class="section-label">Personal Dashboard</div>
+
+  <div class="tool-grid">
+
+    <!-- realtime.html (統合ダッシュボード) -->
+    <a class="card card--cyan" href="personal/realtime.html">
+      <div class="card-tag">Live</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="6" width="36" height="28" rx="3" stroke="#00e5ff" stroke-width="1.2" opacity="0.4"/>
+          <polyline points="6,22 10,22 13,14 16,30 19,20 22,24 25,10 28,32 31,22 34,22"
+            stroke="#00e5ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="card-title">Real-time Dashboard</div>
+      <div class="card-desc">
+        強震モニタ・震源マップ・経過タイマーを1画面に統合したパーソナルダッシュボード。リアルタイム震度の可視化から地震イベント詳細まで、地震監視に必要な情報を一元管理します。
+      </div>
+      <div class="card-meta">
+        <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="#39ff14" opacity="0.8"/></svg>
+        personal/realtime.html
+      </div>
+    </a>
+
+    <!-- data-jp.html (未作成) -->
+    <a class="card card--orange" href="personal/data-jp.html" style="opacity:0.5;pointer-events:none;cursor:not-allowed;">
+      <div class="card-tag">WIP</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="20" cy="20" r="14" stroke="#ff6e1f" stroke-width="1.2" opacity="0.4"/>
+          <path d="M20 6 C20 6 28 14 28 20 C28 26 24 30 20 34 C16 30 12 26 12 20 C12 14 20 6 20 6Z"
+            stroke="#ff6e1f" stroke-width="1.2" fill="none" opacity="0.5"/>
+          <line x1="6" y1="20" x2="34" y2="20" stroke="#ff6e1f" stroke-width="1" opacity="0.4"/>
+        </svg>
+      </div>
+      <div class="card-title">Data Search — JP</div>
+      <div class="card-desc">
+        日本周辺の地震・津波データ検索ダッシュボード。期間・マグニチュード・深さでフィルタリングし、震源分布を可視化します。
+      </div>
+      <div class="card-meta">
+        <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="#ff6e1f" opacity="0.5"/></svg>
+        未作成 / In Development
+      </div>
+    </a>
+
+    <!-- data-world.html (未作成) -->
+    <a class="card card--orange" href="personal/data-world.html" style="opacity:0.5;pointer-events:none;cursor:not-allowed;">
+      <div class="card-tag">WIP</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="20" cy="20" r="14" stroke="#ff6e1f" stroke-width="1.2" opacity="0.4"/>
+          <ellipse cx="20" cy="20" rx="7" ry="14" stroke="#ff6e1f" stroke-width="1.2" fill="none" opacity="0.5"/>
+          <line x1="6" y1="20" x2="34" y2="20" stroke="#ff6e1f" stroke-width="1" opacity="0.4"/>
+          <line x1="6" y1="14" x2="34" y2="14" stroke="#ff6e1f" stroke-width="0.7" opacity="0.3"/>
+          <line x1="6" y1="26" x2="34" y2="26" stroke="#ff6e1f" stroke-width="0.7" opacity="0.3"/>
+        </svg>
+      </div>
+      <div class="card-title">Data Search — World</div>
+      <div class="card-desc">
+        全世界の地震・津波データ検索ダッシュボード。USGSなどのグローバルカタログから大規模地震を検索・比較できます。
+      </div>
+      <div class="card-meta">
+        <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="#ff6e1f" opacity="0.5"/></svg>
+        未作成 / In Development
+      </div>
+    </a>
+
+  </div>
+
+  <!-- SINGLE FUNCTION TOOLS -->
+  <div class="section-label">Single Function Tools</div>
+
+  <div class="tool-grid">
+
+    <!-- 強震・長周期統合モニタ -->
+    <a class="card card--cyan" href="web/realtime_jp.html">
+      <div class="card-tag">Live</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="20" cy="20" r="16" stroke="#00e5ff" stroke-width="1" stroke-dasharray="3 3" opacity="0.4"/>
+          <path d="M8 22 L14 22 L17 12 L20 28 L23 16 L26 22 L32 22" stroke="#00e5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M6 30 Q10 26 14 30 Q18 34 22 30 Q26 26 30 30 Q34 26 38 30" stroke="#00e5ff" stroke-width="1" stroke-linecap="round" fill="none" opacity="0.5"/>
+        </svg>
+      </div>
+      <div class="card-title">日本周辺 地震モニタ</div>
+      <div class="card-desc">
+        強震モニタ＋長周期地震動モニタの統合ダッシュボード。EEW・上位5観測点・JST/UTC二重時計。切り替えスイッチで2つのモニタを即時切り替え。
+      </div>
+    </a>
+
+    <!-- リアルタイム震度マップ -->
+    <a class="card card--cyan" href="web/realtime_map.html">
+      <div class="card-tag">Live</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M10 20 L15 20 L18 10 L22 30 L25 20 L30 20" stroke="#00e5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="20" cy="20" r="18" stroke="#00e5ff" stroke-width="1" stroke-dasharray="4 4" opacity="0.3"/>
+        </svg>
+      </div>
+      <div class="card-title">Real-time Intensity Map</div>
+      <div class="card-desc">
+        強震モニタのリアルタイム震度データを可視化。日本全国の観測網から届く微小な揺れから大地震まで、波の伝播をダイレクトに捉えます。
+      </div>
+    </a>
+
+    <!-- 長周期地震動モニタ -->
+    <a class="card card--cyan" href="web/lmoni_map.html">
+      <div class="card-tag">Live</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M2,22 Q8,8 14,22 Q20,36 26,22 Q32,8 38,22"
+            stroke="#00e5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          <path d="M2,28 Q8,20 14,28 Q20,36 26,28 Q32,20 38,28"
+            stroke="#00e5ff" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.4"/>
+        </svg>
+      </div>
+      <div class="card-title">Long-period Monitor</div>
+      <div class="card-desc">
+        防災科研の長周期地震動モニタ（abrspmx_s）をリアルタイム表示。GIF画像から観測点ごとのRGB値を直接サンプリングし、Leafletマップ上に色付きマーカーで可視化します。
+      </div>
+    </a>
+
+    <!-- 強震モニタ 履歴再生 -->
+    <a class="card card--green" href="web/monitor_replay.html">
+      <div class="card-tag">Replay</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="20" cy="20" r="14" stroke="#39ff14" stroke-width="1.2" opacity="0.4"/>
+          <polygon points="16,13 16,27 27,20" fill="#39ff14" opacity="0.85"/>
+          <path d="M8 20 A12 12 0 0 1 20 8" stroke="#39ff14" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+          <polyline points="8,14 8,20 14,20" stroke="#39ff14" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        </svg>
+      </div>
+      <div class="card-title">Monitor Replay</div>
+      <div class="card-desc">
+        強震モニタ画像は約4時間で消えてしまうため、日時を指定して数値データをダウンロードし、後からタイムライン再生するツール。震度の時系列をスライダーで巻き戻し・早送りしながら、揺れの伝播を観測点ごとに確認できます。長周期地震動モニタにも対応。
+      </div>
+      <div class="card-meta">
+        <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="#39ff14" opacity="0.8"/></svg>
+        web/monitor_replay.html
+      </div>
+    </a>
+
+    <!-- Hypo Map Viewer -->
+    <a class="card card--cyan" href="web/hypo_map_viewer.html">
+      <div class="card-tag">Map</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="20" cy="20" r="12" stroke="#00e5ff" stroke-width="1.5" opacity="0.3"/>
+          <circle cx="20" cy="20" r="7"  stroke="#00e5ff" stroke-width="1.5" opacity="0.6"/>
+          <circle cx="20" cy="20" r="2.5" fill="#00e5ff"/>
+          <line x1="20" y1="2" x2="20" y2="8"  stroke="#00e5ff" stroke-width="1" opacity="0.5"/>
+          <line x1="20" y1="32" x2="20" y2="38" stroke="#00e5ff" stroke-width="1" opacity="0.5"/>
+          <line x1="2"  y1="20" x2="8"  y2="20" stroke="#00e5ff" stroke-width="1" opacity="0.5"/>
+          <line x1="32" y1="20" x2="38" y2="20" stroke="#00e5ff" stroke-width="1" opacity="0.5"/>
+        </svg>
+      </div>
+      <div class="card-title">Hypo Map Viewer</div>
+      <div class="card-desc">
+        Leaflet.jsベースの震源地図。GSI淡色タイル＋陰影起伏オーバーレイ上に深さ・マグニチュード別のマーカーをプロット。JMA GeoJSON日次データをマルチデイ並列取得し、地図・テーブル双方向インタラクションで詳細を確認できます。
+      </div>
+    </a>
+
+    <!-- Earthquake Viz (ETAS) -->
+    <a class="card card--orange" href="web/earthquake_viz.html">
+      <div class="card-tag">Analysis</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <polyline points="2,32 8,32 10,24 13,38 16,18 19,30 22,10 25,36 28,26 31,32 38,32"
+            stroke="#ff6e1f" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
+          <line x1="2" y1="32" x2="38" y2="32" stroke="#ff6e1f" stroke-width="0.8" opacity="0.3"/>
+        </svg>
+      </div>
+      <div class="card-title">Earthquake Viz</div>
+      <div class="card-desc">
+        ETASモデル（地震誘発型余震系列）のパラメータ推定・フィッティングダッシュボード。Gutenberg-Richter b値、完全性マグニチュードMc、Omori–Utsu減衰則をインタラクティブに可視化。KS検定p値によるモデル適合評価機能付き。
+      </div>
+    </a>
+
+    <!-- World Earthquake Monitor -->
+    <a class="card card--cyan" href="web/realtime_world.html">
+      <div class="card-tag">Live</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="20" cy="20" r="13" stroke="#00e5ff" stroke-width="1.2" opacity="0.4"/>
+          <circle cx="20" cy="20" r="7"  stroke="#00e5ff" stroke-width="1"   opacity="0.6"/>
+          <circle cx="20" cy="20" r="2"  fill="#00e5ff"/>
+          <line x1="7"  y1="20" x2="33" y2="20" stroke="#00e5ff" stroke-width="0.8" opacity="0.4"/>
+          <line x1="20" y1="7"  x2="20" y2="33" stroke="#00e5ff" stroke-width="0.8" opacity="0.4"/>
+          <ellipse cx="20" cy="20" rx="5" ry="13" stroke="#00e5ff" stroke-width="0.8" opacity="0.35"/>
+        </svg>
+      </div>
+      <div class="card-title">World Earthquake Monitor</div>
+      <div class="card-desc">
+        全世界の地震をリアルタイム監視。USGS データをもとにM5.0以上の地震を一覧表示し、P波・S波の到達カウントダウンを各イベントごとに表示します。
+      </div>
+      <div class="card-meta">web/realtime_world.html</div>
+    </a>
+
+    <!-- Elapsed Timer -->
+    <a class="card card--green" href="web/elapsed_timer.html">
+      <div class="card-tag">Monitor</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="20" cy="22" r="13" stroke="#39ff14" stroke-width="1.5" opacity="0.5"/>
+          <line x1="20" y1="22" x2="20" y2="12" stroke="#39ff14" stroke-width="2" stroke-linecap="round"/>
+          <line x1="20" y1="22" x2="27" y2="26" stroke="#39ff14" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="20" cy="22" r="2" fill="#39ff14"/>
+          <line x1="16" y1="4" x2="24" y2="4" stroke="#39ff14" stroke-width="1.5" opacity="0.6" stroke-linecap="round"/>
+          <line x1="20" y1="4" x2="20" y2="9" stroke="#39ff14" stroke-width="1.5" opacity="0.6" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="card-title">Elapsed Timer</div>
+      <div class="card-desc">
+        主要地震からの経過時間をリアルタイム表示するモニタリングツール。最終大地震からの日数・時間・分・秒をカウントアップし、余震活動の時間的推移把握を支援します。
+      </div>
+    </a>
+
+    <!-- 震度分布予測 AI -->
+    <a class="card card--orange" href="web/seismic_predict.html">
+      <div class="card-tag">AI</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="20" cy="20" r="13" stroke="#ff6e1f" stroke-width="1.2" opacity="0.4"/>
+          <circle cx="20" cy="20" r="3"  fill="#ff6e1f" opacity="0.9"/>
+          <circle cx="20" cy="7"  r="2"  fill="#ff6e1f" opacity="0.5"/>
+          <circle cx="20" cy="33" r="2"  fill="#ff6e1f" opacity="0.5"/>
+          <circle cx="7"  cy="20" r="2"  fill="#ff6e1f" opacity="0.5"/>
+          <circle cx="33" cy="20" r="2"  fill="#ff6e1f" opacity="0.5"/>
+          <line x1="20" y1="17" x2="20" y2="9"  stroke="#ff6e1f" stroke-width="1" opacity="0.6"/>
+          <line x1="20" y1="23" x2="20" y2="31" stroke="#ff6e1f" stroke-width="1" opacity="0.6"/>
+          <line x1="17" y1="20" x2="9"  y2="20" stroke="#ff6e1f" stroke-width="1" opacity="0.6"/>
+          <line x1="23" y1="20" x2="31" y2="20" stroke="#ff6e1f" stroke-width="1" opacity="0.6"/>
+        </svg>
+      </div>
+      <div class="card-title">Seismic Intensity AI</div>
+      <div class="card-desc">
+        Cross-Attention Transformer による震度分布予測AI。震源位置・深さ・規模から全国約4,400観測点の計測震度を推定し、Leafletマップ上にJMA配色でリアルタイム描画します。1996〜2022年の気象庁データ（約170万観測）で学習。
+      </div>
+      <div class="card-meta">
+        <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="#ff6e1f" opacity="0.8"/></svg>
+        web/seismic_predict.html
+      </div>
+    </a>
+
+    <!-- 津波情報・験潮統合ビューア -->
+    <a class="card card--cyan" href="web/tsunami_jp.html">
+      <div class="card-tag">Live</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M2 30 Q6 20 10 26 Q14 32 18 22 Q22 12 26 20 Q30 28 34 18 Q36 14 38 16"
+                stroke="#00d4ff" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+          <path d="M2 34 Q6 26 10 30 Q14 34 18 28 Q22 22 26 26 Q30 30 38 24"
+                stroke="#00c49a" stroke-width="1.5" stroke-linecap="round" fill="none" stroke-dasharray="3 2"/>
+          <circle cx="30" cy="10" r="4" fill="none" stroke="#00d4ff" stroke-width="1.5"/>
+          <line x1="30" y1="4" x2="30" y2="2" stroke="#00d4ff" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="30" y1="18" x2="30" y2="16" stroke="#00d4ff" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="24" y1="10" x2="22" y2="10" stroke="#00d4ff" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="38" y1="10" x2="36" y2="10" stroke="#00d4ff" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="card-title">津波情報・験潮統合ビューア</div>
+      <div class="card-desc">
+        気象庁の津波警報・注意報を地図と警報リストで表示し、験潮（潮位波形）データを同一画面に統合。津波情報と観測潮位の両方を一覧できます。
+      </div>
+      <div class="card-meta">
+        <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="#00d4ff" opacity="0.8"/></svg>
+        web/tsunami_jp.html
+      </div>
+    </a>
+
+    <!-- 津波情報ビューア -->
+    <a class="card card--cyan" href="web/tsunami_viewer.html">
+      <div class="card-tag">Live</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M2 30 Q6 20 10 26 Q14 32 18 22 Q22 12 26 20 Q30 28 34 18 Q36 14 38 16"
+            stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          <path d="M2 36 Q8 30 14 34 Q20 38 26 32 Q32 26 38 30"
+            stroke="#00d4ff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.5"/>
+          <circle cx="26" cy="20" r="3" fill="none" stroke="#00d4ff" stroke-width="1.5" opacity="0.7"/>
+          <line x1="26" y1="4" x2="26" y2="17" stroke="#00d4ff" stroke-width="1.2" opacity="0.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="card-title">Tsunami Viewer</div>
+      <div class="card-desc">
+        気象庁の津波警報・注意報をリアルタイム表示。大津波警報・津波警報・津波注意報の発表状況を色分けマップと地域リストで一覧。警報解除まで60秒ごとに自動更新します。
+      </div>
+      <div class="card-meta">
+        <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="#00d4ff" opacity="0.8"/></svg>
+        web/tsunami_viewer.html
+      </div>
+    </a>
+
+    <!-- 潮位観測ビューア -->
+    <a class="card card--cyan" href="web/tide_viewer.html">
+      <div class="card-tag">Live</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 28 Q8 22 12 28 Q16 34 20 28 Q24 22 28 28 Q32 34 36 28"
+            stroke="#00e5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          <path d="M4 20 Q8 14 12 20 Q16 26 20 20 Q24 14 28 20 Q32 26 36 20"
+            stroke="#00e5ff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.5"/>
+          <line x1="20" y1="4" x2="20" y2="14" stroke="#00e5ff" stroke-width="1.2" opacity="0.4" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="card-title">Tide Viewer</div>
+      <div class="card-desc">
+        海上保安庁・気象庁の潮位観測データをリアルタイム表示。地点リストから観測所を選択し、時系列グラフで海面水位の変動を確認できます。津波監視の補助ツールとして活用できます。
+      </div>
+      <div class="card-meta">
+        <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="#00e5ff" opacity="0.8"/></svg>
+        web/tide_viewer.html
+      </div>
+    </a>
+
+  </div><!-- .tool-grid (single function tools) -->
+
+</div><!-- .page -->
+
+<script>
+// ── SEISMIC WAVEFORM CANVAS ──────────────────────────────────────────────────
+(function() {
+  const canvas = document.getElementById('seismic-canvas');
+  const ctx    = canvas.getContext('2d');
+  let W, H, lines;
+
+  function resize() {
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    initLines();
+  }
+
+  function initLines() {
+    const N = Math.floor(H / 80);
+    lines = Array.from({ length: N }, (_, i) => ({
+      y:     (i + 0.5) * (H / N),
+      phase: Math.random() * Math.PI * 2,
+      speed: 0.002 + Math.random() * 0.003,
+      amp:   6 + Math.random() * 18,
+      // occasional spike
+      spikeAt:   Math.random() * W,
+      spikeAmp:  40 + Math.random() * 80,
+      spikeW:    30 + Math.random() * 60,
+      color: Math.random() > 0.85 ? '#ff6e1f' : '#00e5ff',
+    }));
+  }
+
+  function draw(t) {
+    ctx.clearRect(0, 0, W, H);
+    lines.forEach(l => {
+      ctx.beginPath();
+      ctx.strokeStyle = l.color;
+      ctx.lineWidth   = 0.8;
+      const step = 3;
+      for (let x = 0; x <= W; x += step) {
+        const nx = x / W;         // normalised 0-1
+        // base sine
+        let dy = Math.sin(nx * 14 + l.phase + t * l.speed * 1000) * l.amp * 0.3;
+        // random noise layer
+        dy += (Math.random() - 0.5) * l.amp * 0.15;
+        // spike envelope
+        const dx  = x - l.spikeAt;
+        const env = Math.exp(-(dx * dx) / (2 * l.spikeW * l.spikeW));
+        dy += Math.sin(nx * 60 + t * 0.04) * l.spikeAmp * env;
+        const py = l.y + dy;
+        x === 0 ? ctx.moveTo(x, py) : ctx.lineTo(x, py);
+      }
+      ctx.stroke();
+    });
+
+    // slowly drift spike positions
+    lines.forEach(l => {
+      l.spikeAt += 0.4;
+      if (l.spikeAt > W + 200) {
+        l.spikeAt  = -200;
+        l.spikeAmp = 40 + Math.random() * 80;
+        l.spikeW   = 30 + Math.random() * 60;
+      }
+    });
+  }
+
+  let last = 0;
+  function loop(ts) {
+    const dt = (ts - last) / 1000;
+    last = ts;
+    draw(ts / 1000);
+    requestAnimationFrame(loop);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

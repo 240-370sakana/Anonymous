@@ -1,0 +1,1065 @@
+<!-- 2026-05-19 -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>強震モニタ リアルタイム震度マップ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="../css/quakeview.css">
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+</head>
+<body class="rtm-body">
+
+<!-- ── ヘッダー ──────────────────────────────────────────────── -->
+<header class="rtm-header">
+  <h1>⚡ 強震モニタ <small>リアルタイム震度</small></h1>
+  <a href="lmoni_map.html" class="btn">長周期モニタ →</a>
+  <div class="rtm-status-bar">
+    <button id="rtm-audio-toggle" class="btn rtm-audio-btn"
+            title="クリックして音声アラートを有効化">🔇 音声OFF</button>
+    <span id="rtm-fetch-indicator" class="rtm-indicator"></span>
+    <span id="rtm-clock"></span>
+    <span id="rtm-error-msg" class="rtm-error-msg"></span>
+  </div>
+</header>
+
+<!-- ── メインエリア ──────────────────────────────────────────── -->
+<div class="rtm-main">
+
+  <!-- 左サイドバー -->
+  <aside class="rtm-sidebar">
+
+    <!-- ── 緊急地震速報 ── -->
+    <span class="section-label">緊急地震速報</span>
+    <div id="rtm-eew-panel" class="eew-panel eew-panel--none">
+      <div class="eew-top-row">
+        <div class="eew-intensity-cell">
+          <span class="eew-cell-label">推定最大震度</span>
+          <span id="rtm-eew-intensity" class="eew-intensity">-</span>
+        </div>
+        <div class="eew-report-cell">
+          <span class="eew-cell-label">報数</span>
+          <span id="rtm-eew-report-num" class="eew-report-num">-</span>
+        </div>
+      </div>
+      <div id="rtm-eew-region" class="eew-region">-</div>
+      <div class="eew-info-grid">
+        <span class="eew-info-label">M</span>
+        <span id="rtm-eew-mag" class="eew-info-val">-</span>
+        <span class="eew-info-label">深さ</span>
+        <span id="rtm-eew-depth" class="eew-info-val">-</span>
+        <span class="eew-info-label">発表</span>
+        <span id="rtm-eew-time" class="eew-info-val">-</span>
+      </div>
+    </div>
+
+    <!-- ── 震源要素自動推定（未実装） ── -->
+    <div class="eew-panel eew-panel--none eew-unimpl-panel">
+      <span class="eew-unimpl-text">震源要素自動推定<br><small>（未実装）</small></span>
+    </div>
+
+    <div class="rtm-divider"></div>
+
+    <!-- ── 観測点詳細 ── -->
+    <span class="section-label">実測震度</span>
+    <span class="section-label">観測点詳細</span>
+    <div id="rtm-detail-content">
+      <p class="rtm-placeholder">地図上の点を選択</p>
+    </div>
+
+    <div class="rtm-divider"></div>
+
+    <!-- ── 上位5位 ── -->
+    <span class="section-label">上位5位</span>
+    <div id="rtm-top5-list"></div>
+
+    <!-- 非表示: 既存JSのために保持 -->
+    <div hidden>
+      <div id="rtm-alert-block"><div id="rtm-alert-msg"></div></div>
+      <span id="rtm-stat-total"></span>
+      <span id="rtm-stat-active"></span>
+      <span id="rtm-stat-max-name"></span>
+      <span id="rtm-stat-max"></span>
+    </div>
+
+  </aside>
+
+  <!-- MapLibre マップ + 凡例オーバーレイ -->
+  <div class="rtm-map-wrap">
+    <div id="rtm-map" class="rtm-map-area"></div>
+    <div class="rtm-legend-overlay">
+      <span class="rtm-legend-overlay-title">リアルタイム震度</span>
+      <div id="rtm-legend-items"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+'use strict';
+
+// ============================================================
+// ① 純粋ロジック関数（副作用なし・グローバル変数参照なし）
+// ============================================================
+
+// ── カラーマップ定数（NIED 強震モニタ準拠, SI: -3.0〜7.0, step 0.1） ──
+const SHINDO_COLORMAP = [
+  [  0,  0,205],[  0,  7,209],[  0, 14,214],[  0, 21,218],[  0, 28,223],
+  [  0, 36,227],[  0, 43,231],[  0, 50,236],[  0, 57,240],[  0, 64,245],
+  [  0, 72,250],[  0, 85,238],[  0, 99,227],[  0,112,216],[  0,126,205],
+  [  0,140,194],[  0,153,183],[  0,167,172],[  0,180,161],[  0,194,150],
+  [  0,208,139],[  6,212,130],[ 12,216,121],[ 18,220,113],[ 25,224,104],
+  [ 31,228, 96],[ 37,233, 88],[ 44,237, 79],[ 50,241, 71],[ 56,245, 62],
+  [ 63,250, 54],[ 75,250, 49],[ 88,250, 45],[100,251, 41],[113,251, 37],
+  [125,252, 33],[138,252, 28],[151,253, 24],[163,253, 20],[176,254, 16],
+  [189,255, 12],[195,254, 10],[202,254,  9],[208,254,  8],[215,254,  7],
+  [222,255,  5],[228,254,  4],[235,255,  3],[241,254,  2],[248,255,  1],
+  [255,255,  0],[254,251,  0],[254,248,  0],[254,244,  0],[254,241,  0],
+  [255,238,  0],[254,234,  0],[255,231,  0],[254,227,  0],[255,224,  0],
+  [255,221,  0],[254,213,  0],[254,205,  0],[254,197,  0],[254,190,  0],
+  [255,182,  0],[254,174,  0],[255,167,  0],[254,159,  0],[255,151,  0],
+  [255,144,  0],[254,136,  0],[254,128,  0],[254,121,  0],[254,113,  0],
+  [255,106,  0],[254, 98,  0],[255, 90,  0],[254, 83,  0],[255, 75,  0],
+  [255, 68,  0],[254, 61,  0],[253, 54,  0],[252, 47,  0],[251, 40,  0],
+  [250, 33,  0],[249, 27,  0],[248, 20,  0],[247, 13,  0],[246,  6,  0],
+  [245,  0,  0],[238,  0,  0],[230,  0,  0],[223,  0,  0],[215,  0,  0],
+  [208,  0,  0],[200,  0,  0],[192,  0,  0],[185,  0,  0],[177,  0,  0],
+  [170,  0,  0],
+];
+const SI_MIN  = -3.0;
+const SI_STEP =  0.1;
+
+/** 低ズームモード パラメータ（観測点は常に表示） */
+const SPARSE_ZOOM_THRESHOLD = 8;
+const SPARSE_SI_THRESHOLD   = -3.1;  // カラーマップ最小値 -3.0 より低いため全観測点を表示
+const SPARSE_RADIUS_SCALE   = 0.6;
+
+/** 近傍クラスタ判定パラメータ（生活振動誤検知抑制） */
+const CLUSTER_RADIUS_KM = 150;  // 近傍とみなす距離(km)
+const CLUSTER_MIN_COUNT = 3;    // 地震検知に必要な最小観測点数
+
+/** 震度スケール凡例エントリ */
+const LEGEND_ENTRIES = [
+  { si: 7.0, label: '7'  }, { si: 6.5, label: '6強' },
+  { si: 6.0, label: '6弱' }, { si: 5.5, label: '5強' },
+  { si: 5.0, label: '5弱' }, { si: 4.0, label: '4'  },
+  { si: 3.0, label: '3'  }, { si: 2.0, label: '2'  },
+  { si: 1.0, label: '1'  }, { si: 0.0, label: '0'  },
+];
+
+/** デフォルト音声パス */
+const RTM_DEFAULT_SOUND_PATHS = [
+  '/sounds/Shindo0.wav',
+  '/sounds/Shindo1.wav',
+  '/sounds/Shindo2.wav',
+];
+
+/** MapLibre マップデフォルト設定 */
+const RTM_DEFAULT_MAP_OPTIONS = {
+  center: [34.5, 135.5],
+  zoom:   4.3,
+};
+
+/** CARTO dark タイルスタイル */
+const CARTO_DARK_STYLE = {
+  version: 8,
+  sources: { carto: { type: 'raster',
+    tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
+    tileSize: 256, attribution: '©OpenStreetMap ©CARTO | 強震モニタ: 防災科研' }},
+  layers: [{ id: 'carto', type: 'raster', source: 'carto' }]
+};
+
+/**
+ * 震度値 → CSS rgb 文字列（NIED カラーマップ）
+ */
+function shindoToColor(si) {
+  if (si == null) return null;
+  const idx = Math.round(Math.max(0, Math.min(100, (si - SI_MIN) / SI_STEP)));
+  const [r, g, b] = SHINDO_COLORMAP[idx];
+  return `rgb(${r},${g},${b})`;
+}
+
+/**
+ * 震度値 → マーカー半径(px)
+ */
+function shindoToRadius(si) {
+  if (si == null) return 5;
+  return 6 + Math.max(0, si - 1.0) * 2.0;
+}
+
+/**
+ * 最大震度 → アラート情報
+ */
+function calcAlertLevel(maxSi) {
+  if (maxSi === null) return { level: null, message: '' };
+  if (maxSi >= 4.0)  return { level: 2, message: `強い揺れを検知 (RI ≥ 4.0)` };
+  if (maxSi >= 0.5)  return { level: 1, message: `弱い揺れを検知 (RI ≥ 0.5)` };
+  return { level: 0, message: `微弱な揺れを検知 (RI ≥ 0.0)` };
+}
+
+/**
+ * 2点間の距離（km）— Haversine 公式
+ */
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371, rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
+  const a = Math.sin(dLat / 2) ** 2
+          + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * 観測点配列のうち thresholdSi 以上の点で最大クラスタ数を返す
+ */
+function findMaxCluster(stations, thresholdSi, radiusKm) {
+  const active = stations.filter(
+    st => st.lat != null && st.lon != null && st.shindo !== null && st.shindo >= thresholdSi
+  );
+  let max = 0;
+  for (const s of active) {
+    let count = 0;
+    for (const t of active) {
+      if (haversineKm(s.lat, s.lon, t.lat, t.lon) <= radiusKm) count++;
+    }
+    if (count > max) max = count;
+  }
+  return max;
+}
+
+/**
+ * 近傍 minCount 点以上が閾値超過したときのみレベルを返す（生活振動誤検知抑制版）
+ */
+function calcAlertLevelClustered(stations, minCount, radiusKm) {
+  const maxSi = stations.reduce(
+    (m, st) => st.shindo !== null ? (m === null ? st.shindo : Math.max(m, st.shindo)) : m,
+    null
+  );
+  if (maxSi === null) return { level: null, message: '' };
+  if (maxSi >= 4.0 && findMaxCluster(stations, 4.0, radiusKm) >= minCount)
+    return { level: 2, message: `強い揺れを検知 (RI ≥ 4.0, 近傍${minCount}点以上)` };
+  if (maxSi >= 0.5 && findMaxCluster(stations, 0.5, radiusKm) >= minCount)
+    return { level: 1, message: `弱い揺れを検知 (RI ≥ 0.5, 近傍${minCount}点以上)` };
+  return { level: 0, message: `微弱な揺れを検知 (RI ≥ 0.0)` };
+}
+
+/**
+ * 観測点配列 → 統計オブジェクト
+ */
+function calcStats(stations) {
+  let active = 0, maxSi = null, maxName = '-';
+  for (const st of stations) {
+    if (st.lat == null || st.lon == null) continue;
+    if (st.shindo !== null) {
+      active++;
+      if (maxSi === null || st.shindo > maxSi) { maxSi = st.shindo; maxName = st.name; }
+    }
+  }
+  return { total: stations.length, active, maxSi, maxName };
+}
+
+/**
+ * UNIX ミリ秒 → 日本時間 HH:MM:SS 文字列
+ */
+function formatJST(ms) {
+  return new Date(ms).toLocaleTimeString('ja-JP', {
+    hour12: false,
+    timeZone: 'Asia/Tokyo',
+  });
+}
+
+/**
+ * 最終更新からの経過時間でデータの陳腐化を判定する
+ */
+function isStale(lastMs, nowMs, thresholdMs) {
+  return lastMs !== null && (nowMs - lastMs) > thresholdMs;
+}
+
+/**
+ * ズームと震度から観測点を表示すべきか判定する
+ */
+function shouldShowStation(si, zoom) {
+  if (zoom >= SPARSE_ZOOM_THRESHOLD) return true;
+  if (si === null) return true;
+  return si > SPARSE_SI_THRESHOLD;
+}
+
+/**
+ * ズームレベルに応じたマーカー半径スケール係数
+ */
+function calcZoomRadiusScale(zoom) {
+  return zoom >= SPARSE_ZOOM_THRESHOLD ? 1.0 : SPARSE_RADIUS_SCALE;
+}
+
+// ── EEW 純粋ロジック ───────────────────────────────────────
+
+/**
+ * NIED EEW JSONレスポンス → 正規化オブジェクト（発表なし時は null）
+ */
+function parseEEW(raw) {
+  if (!raw.origin_time) return null;
+  return {
+    originTime:    raw.origin_time,
+    reportTime:    raw.report_time,
+    reportId:      raw.report_id,
+    reportNum:     parseInt(raw.report_num, 10),
+    regionName:    raw.region_name,
+    latitude:      parseFloat(raw.latitude),
+    longitude:     parseFloat(raw.longitude),
+    depth:         parseInt(raw.depth),
+    magnitude:     parseFloat(raw.magunitude),
+    calcIntensity: raw.calcintensity !== ''
+                     ? parseFloat(raw.calcintensity)
+                     : null,
+    alertFlag:     raw.alertflg,
+    isFinal:       raw.is_final    === true,
+    isCancel:      raw.is_cancel   === true,
+    isTraining:    raw.is_training === true,
+  };
+}
+
+/**
+ * UNIX ミリ秒 → NIED EEW エンドポイント用 JST タイムスタンプ（2秒前）
+ */
+function buildEEWTimestamp(nowMs) {
+  const jst = new Date((nowMs - 2000) + 9 * 60 * 60 * 1000);
+  return jst.toISOString().replace(/[-T:]/g, '').slice(0, 14);
+}
+
+/**
+ * 計算震度値 → JMA震度表示文字列
+ */
+function formatIntensity(si) {
+  if (si === null) return '-';
+  if (si >= 7.0) return '7';
+  if (si >= 6.5) return '6強';
+  if (si >= 6.0) return '6弱';
+  if (si >= 5.5) return '5強';
+  if (si >= 5.0) return '5弱';
+  return String(Math.round(si));
+}
+
+/**
+ * EEW report_time 文字列 → 時刻部分のみ抽出
+ */
+function formatEEWReportTime(str) {
+  if (!str) return '-';
+  const parts = str.split(' ');
+  return parts[1] || str;
+}
+
+/**
+ * 観測点配列 → 震度降順上位 N 件
+ */
+function calcTop5(stations, n = 5) {
+  return [...stations]
+    .filter(st => st.shindo !== null && st.lat != null)
+    .sort((a, b) => b.shindo - a.shindo)
+    .slice(0, n);
+}
+
+/**
+ * マグニチュード → 震源×印の画素サイズ
+ */
+function calcEEWMarkerSize(mag) {
+  return Math.max(12, Math.min(24, 10 + (mag || 4) * 1.2));
+}
+
+
+// ============================================================
+// ② 描画関数（DOM操作のみ・引数で受け取る）
+// ============================================================
+
+/* ─── DualScale コントロール（MapLibre） ─── */
+function haversineKmForScale(lat1, lon1, lat2, lon2) {
+  const R = 6371, dLat = (lat2 - lat1) * Math.PI / 180, dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+class DualScaleControl {
+  onAdd(map) {
+    this._map = map;
+    const w = document.createElement('div');
+    w.className = 'maplibregl-ctrl ds-wrap';
+    this._latLabel = document.createElement('div');
+    this._latLabel.className = 'ds-lat-label';
+    this._L = document.createElement('div');
+    this._L.className = 'ds-L';
+    this._lonLabel = document.createElement('div');
+    this._lonLabel.className = 'ds-lon-label';
+    w.appendChild(this._latLabel);
+    w.appendChild(this._L);
+    w.appendChild(this._lonLabel);
+    this._update = this._update.bind(this);
+    map.on('zoomend', this._update);
+    map.on('moveend', this._update);
+    setTimeout(() => this._update(), 0);
+    return w;
+  }
+  onRemove() {
+    this._map.off('zoomend', this._update);
+    this._map.off('moveend', this._update);
+  }
+  _niceKm(km) {
+    const e = Math.pow(10, Math.floor(Math.log10(km)));
+    const f = km / e;
+    return f < 1.5 ? e : f < 3.5 ? 2 * e : f < 7.5 ? 5 * e : 10 * e;
+  }
+  _fmtKm(km) { return km >= 1 ? km + ' km' : Math.round(km * 1000) + ' m'; }
+  _update() {
+    const map = this._map;
+    const c = map.getCanvas();
+    const cx = c.offsetWidth / 2, cy = c.offsetHeight / 2, ref = 100;
+    const ll0 = map.unproject([cx, cy]);
+    const llE = map.unproject([cx + ref, cy]);
+    const llN = map.unproject([cx, cy - ref]);
+    const kpLon = haversineKmForScale(ll0.lat, ll0.lng, ll0.lat, llE.lng) / ref;
+    const kpLat = haversineKmForScale(ll0.lat, ll0.lng, llN.lat, ll0.lng) / ref;
+    const t = this._niceKm((kpLon + kpLat) / 2 * 80);
+    const lp = Math.max(10, Math.round(t / kpLon));
+    const latp = Math.max(10, Math.round(t / kpLat));
+    this._L.style.width = lp + 'px';
+    this._L.style.height = latp + 'px';
+    this._lonLabel.style.width = lp + 'px';
+    this._latLabel.textContent = 'N-S ' + this._fmtKm(t);
+    this._lonLabel.textContent = 'E-W ' + this._fmtKm(t);
+  }
+}
+
+function addDualScaleBar(map) {
+  map.addControl(new DualScaleControl(), 'bottom-left');
+}
+
+/**
+ * グラチキュール（緯度経度グリッド）を追加する（MapLibre）
+ */
+function addGraticule(map) {
+  function gridStep(z) {
+    if (z >= 10) return 0.1; if (z >= 9) return 0.5; if (z >= 8) return 1;
+    if (z >= 6) return 2;   if (z >= 4) return 5;  return 10;
+  }
+  function fmtLat(v) { const a = Math.abs(v); return (a % 1 === 0 ? a.toFixed(0) : a.toFixed(2)) + (v >= 0 ? '°N' : '°S'); }
+  function fmtLon(v) { const n = ((v % 360) + 360) % 360, d = n > 180 ? n - 360 : n, a = Math.abs(d); return (a % 1 === 0 ? a.toFixed(0) : a.toFixed(2)) + (d >= 0 ? '°E' : '°W'); }
+
+  function buildLines() {
+    const step = gridStep(map.getZoom()), features = [];
+    for (let lat = -90; lat <= 90; lat = +(lat + step).toFixed(9))
+      features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[-180, lat], [180, lat]] } });
+    for (let lon = -180; lon <= 180; lon = +(lon + step).toFixed(9))
+      features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[lon, -90], [lon, 90]] } });
+    return { type: 'FeatureCollection', features };
+  }
+
+  const labelDiv = document.createElement('div');
+  labelDiv.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;';
+  map.getCanvasContainer().appendChild(labelDiv);
+
+  function buildLabels() {
+    labelDiv.innerHTML = '';
+    const b = map.getBounds(), step = gridStep(map.getZoom());
+    const latMin = Math.ceil(b.getSouth() / step) * step;
+    const latMax = Math.floor(b.getNorth() / step) * step;
+    const lonMin = Math.ceil(b.getWest() / step) * step;
+    const lonMax = Math.floor(b.getEast() / step) * step;
+    for (let lat = latMin; lat <= latMax + 1e-9; lat = +(lat + step).toFixed(9)) {
+      if (lat < -90 || lat > 90) continue;
+      const { x, y } = map.project([b.getWest(), lat]);
+      const d = document.createElement('div');
+      d.className = 'gr-label gr-lat-label';
+      d.textContent = fmtLat(lat);
+      d.style.cssText = `position:absolute;left:${x + 2}px;top:${y - 8}px;`;
+      labelDiv.appendChild(d);
+    }
+    for (let lon = lonMin; lon <= lonMax + 1e-9; lon = +(lon + step).toFixed(9)) {
+      const { x, y } = map.project([lon, b.getSouth()]);
+      const d = document.createElement('div');
+      d.className = 'gr-label gr-lon-label';
+      d.textContent = fmtLon(lon);
+      d.style.cssText = `position:absolute;left:${x - 30}px;top:${y + 2}px;`;
+      labelDiv.appendChild(d);
+    }
+  }
+
+  map.addSource('graticule', { type: 'geojson', data: buildLines() });
+  map.addLayer({ id: 'graticule', type: 'line', source: 'graticule',
+    paint: { 'line-color': 'rgba(100,160,220,0.18)', 'line-width': 1 } });
+
+  function redraw() { map.getSource('graticule').setData(buildLines()); buildLabels(); }
+  map.on('zoomend', redraw);
+  map.on('moveend', buildLabels);
+  buildLabels();
+}
+
+/**
+ * サイドバーの凡例リストを生成する
+ */
+function buildLegend(containerEl, entries, colorFn) {
+  containerEl.innerHTML = '';
+
+  entries.forEach(({ si, label }) => {
+    const color = colorFn(si);
+    const item  = document.createElement('div');
+    item.className = 'rtm-legend-item';
+    // 動的カラーマップ値のため CSS 変数ではなく計算 RGB を直接使用（設計上の例外）
+    item.innerHTML =
+      `<span class="rtm-legend-swatch" style="background:${color}"></span>` +
+      `<span class="rtm-legend-label">${label}</span>`;
+    containerEl.appendChild(item);
+  });
+
+  const gradItem = document.createElement('div');
+  gradItem.className = 'rtm-legend-item rtm-legend-item--grad';
+  gradItem.innerHTML =
+    `<span class="rtm-legend-grad"></span>` +
+    `<span class="rtm-legend-grad-labels"><span>0</span><span>-3</span></span>`;
+  containerEl.appendChild(gradItem);
+}
+
+/**
+ * 観測点詳細パネルを更新する
+ */
+function updateDetailPanel(containerEl, station, colorFn) {
+  if (!station) {
+    containerEl.innerHTML = `<p class="rtm-placeholder">地図上の点を選択</p>`;
+    return;
+  }
+  const siLabel = station.shindo !== null ? station.shindo.toFixed(1) : '観測なし';
+  // 動的カラーマップ値のため CSS 変数ではなく計算 RGB を直接使用（設計上の例外）
+  const siColor = colorFn(station.shindo) || 'var(--text-mid)';
+  containerEl.innerHTML =
+    `<div class="rtm-detail-row">` +
+      `<span class="rtm-detail-name">${station.name || '-'}(${station.code})</span>` +
+      `<span class="rtm-detail-si" style="color:${siColor}">${siLabel}</span>` +
+    `</div>`;
+}
+
+/**
+ * 統計パネルの各 DOM テキストを更新する
+ */
+function updateStatsPanel(els, stats) {
+  els.totalEl.textContent   = stats.total;
+  els.activeEl.textContent  = stats.active;
+  els.maxEl.textContent     = stats.maxSi !== null ? stats.maxSi.toFixed(1) : '-';
+  els.maxNameEl.textContent = stats.maxName;
+}
+
+/**
+ * アラートブロックの表示状態と内容を更新する
+ */
+function updateAlertPanel(blockEl, msgEl, alertInfo) {
+  if (alertInfo.level !== null) {
+    blockEl.hidden    = false;
+    msgEl.textContent = alertInfo.message;
+  } else {
+    blockEl.hidden    = true;
+    msgEl.textContent = '';
+  }
+}
+
+/**
+ * フェッチインジケーターの状態クラスと通信エラーテキストを更新する
+ */
+function updateFetchStatus(indicatorEl, errorEl, { status, message = '' }) {
+  indicatorEl.className = 'rtm-indicator' + (status !== 'ok' ? ` ${status}` : '');
+  errorEl.textContent   = message;
+}
+
+/**
+ * ヘッダー時計の表示を UNIX ミリ秒から更新する
+ */
+function updateClock(clockEl, ms) {
+  clockEl.textContent = formatJST(ms);
+}
+
+/**
+ * 観測点 GeoJSON features を更新する（MapLibre setData）
+ * 各観測点のスタイルは properties に格納する
+ */
+function updateStationsSource(mapInst, stations, zoom, selectedCode) {
+  const source = mapInst.getSource('stations');
+  if (!source) return;
+
+  const scale = calcZoomRadiusScale(zoom);
+
+  const features = stations
+    .filter(st => st.lat != null && st.lon != null)
+    .sort((a, b) => (a.shindo ?? -99) - (b.shindo ?? -99))
+    .map(st => {
+      const visible = shouldShowStation(st.shindo, zoom);
+      const color = shindoToColor(st.shindo);
+      const radius = Math.max(2, Math.round(shindoToRadius(st.shindo) * scale));
+      return {
+        type: 'Feature',
+        id: st.code,
+        geometry: { type: 'Point', coordinates: [st.lon, st.lat] },
+        properties: {
+          code: st.code,
+          name: st.name,
+          shindo: st.shindo,
+          color:       visible && color  ? color       : (visible ? '#444c56' : 'transparent'),
+          radius:      visible           ? radius      : 0,
+          opacity:     visible           ? 0.95        : 0,
+          strokeColor: visible && color  ? '#000'      : (visible ? '#768390' : 'transparent'),
+          strokeWidth: visible && color  ? 0.5         : (visible ? 0.8       : 0),
+        },
+      };
+    });
+
+  source.setData({ type: 'FeatureCollection', features });
+}
+
+/**
+ * EEW 震源×印マーカーを地図上に描画・更新する（MapLibre Marker）
+ */
+function renderEEWEpicenter(mapInst, eewMarkerRef, eew) {
+  if (eewMarkerRef.marker) {
+    eewMarkerRef.marker.remove();
+    eewMarkerRef.marker = null;
+  }
+
+  if (!eew || eew.isCancel || isNaN(eew.latitude) || isNaN(eew.longitude)) return;
+
+  const s     = calcEEWMarkerSize(eew.magnitude);
+  const color = eew.alertFlag === '警報' ? '#ff4c4c' : '#ff6b35';
+  const sw    = Math.max(1.5, s * 0.13);
+
+  const svgStr = `<svg width="${s}" height="${s}" viewBox="-${s/2} -${s/2} ${s} ${s}" xmlns="http://www.w3.org/2000/svg">`
+    + `<line x1="-${s*0.38}" y1="-${s*0.38}" x2="${s*0.38}" y2="${s*0.38}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"/>`
+    + `<line x1="${s*0.38}" y1="-${s*0.38}" x2="-${s*0.38}" y2="${s*0.38}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"/>`
+    + '</svg>';
+
+  const el = document.createElement('div');
+  el.innerHTML = svgStr;
+  el.style.cssText = `width:${s}px;height:${s}px;cursor:pointer;`;
+  el.title = `${eew.regionName}  M${eew.magnitude.toFixed(1)}  深さ${eew.depth}km`
+           + `  (第${eew.reportNum}報・${eew.alertFlag})`;
+
+  eewMarkerRef.marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+    .setLngLat([eew.longitude, eew.latitude])
+    .addTo(mapInst);
+}
+
+/**
+ * EEW パネルの表示を更新する
+ */
+function renderEEW(eewEls, eew) {
+  const { panel, intensity, reportNum, region, mag, depth, time } = eewEls;
+
+  panel.className = 'eew-panel';
+
+  if (!eew) {
+    panel.classList.add('eew-panel--none');
+    intensity.textContent = '-';
+    reportNum.textContent = '-';
+    region.textContent    = '発表なし';
+    mag.textContent       = '-';
+    depth.textContent     = '-';
+    time.textContent      = '-';
+    return;
+  }
+
+  if (eew.isCancel) {
+    panel.classList.add('eew-panel--none');
+    intensity.textContent = '取消';
+    reportNum.textContent = `第${eew.reportNum}報`;
+    region.textContent    = eew.regionName || '-';
+    mag.textContent       = '-';
+    depth.textContent     = '-';
+    time.textContent      = formatEEWReportTime(eew.reportTime);
+    return;
+  }
+
+  panel.classList.add(
+    eew.alertFlag === '警報' ? 'eew-panel--keiho' :
+    eew.alertFlag === '予報' ? 'eew-panel--yoho'  :
+    'eew-panel--none'
+  );
+
+  intensity.textContent = formatIntensity(eew.calcIntensity);
+  reportNum.textContent = eew.isFinal ? `第${eew.reportNum}報(最終報)` : `第${eew.reportNum}報`;
+  region.textContent    = eew.regionName || '-';
+  mag.textContent       = `M${eew.magnitude.toFixed(1)}`;
+  depth.textContent     = `${eew.depth}km`;
+  time.textContent      = formatEEWReportTime(eew.reportTime);
+}
+
+/**
+ * 上位5位の観測点リストを描画する
+ */
+function renderTop5(containerEl, top5, colorFn) {
+  if (!containerEl) return;
+  if (!top5.length) {
+    containerEl.innerHTML = `<p class="rtm-placeholder">観測なし</p>`;
+    return;
+  }
+  // 動的カラーマップ値のため style 属性を直接使用（設計上の例外）
+  containerEl.innerHTML = top5.map(st => {
+    const color = colorFn(st.shindo) || 'var(--text-dim)';
+    return `<div class="rtm-top5-item">` +
+      `<span class="rtm-top5-swatch" style="background:${color}"></span>` +
+      `<span class="rtm-top5-name">${st.name || st.code}</span>` +
+      `<span class="rtm-top5-val" style="color:${color}">${st.shindo.toFixed(1)}</span>` +
+    `</div>`;
+  }).join('');
+}
+
+
+// ============================================================
+// ③ 統合用エントリ関数
+// ============================================================
+
+/**
+ * /api/shindo レスポンスを受け取り、マップと全 UI を一括更新する
+ */
+function onShindoData(mapInst, data, state, els, audioState) {
+  if (data.error) {
+    updateFetchStatus(els.indicator, els.errorMsg, { status: 'error', message: data.error });
+  } else {
+    updateFetchStatus(els.indicator, els.errorMsg, { status: 'ok' });
+  }
+
+  if (!data.stations?.length) return { ...state };
+
+  const lastUpdateMs = data.error ? state.lastUpdateMs : Date.now();
+
+  const zoom = mapInst.getZoom();
+  updateStationsSource(mapInst, data.stations, zoom, state.selectedCode);
+
+  if (state.selectedCode) {
+    const sel = data.stations.find(s => s.code === state.selectedCode);
+    if (sel) updateDetailPanel(els.detail, sel, shindoToColor);
+  }
+
+  const stats = calcStats(data.stations);
+  updateStatsPanel(
+    { totalEl:   els.statTotal,   activeEl: els.statActive,
+      maxEl:     els.statMax,     maxNameEl: els.statMaxName },
+    stats
+  );
+
+  const alertInfo = calcAlertLevelClustered(data.stations, CLUSTER_MIN_COUNT, CLUSTER_RADIUS_KM);
+  updateAlertPanel(els.alertBlock, els.alertMsg, alertInfo);
+
+  if (alertInfo.level !== null && alertInfo.level !== state.alertLevel) {
+    if (audioState.unlocked) {
+      const snd = audioState.sounds[alertInfo.level];
+      snd.currentTime = 0;
+      snd.play().catch(e => console.warn('[Audio] 再生失敗:', e));
+      els.audioBtn.className = 'btn rtm-audio-btn alerting';
+    } else {
+      console.warn('[Audio] 音声 OFF。ヘッダーのボタンで有効化してください。');
+    }
+  } else if (alertInfo.level === null && state.alertLevel !== null && audioState.unlocked) {
+    els.audioBtn.className = 'btn rtm-audio-btn enabled';
+  }
+
+  if (data.time) updateClock(els.clock, new Date(data.time).getTime());
+
+  return { selectedCode: state.selectedCode, alertLevel: alertInfo.level, lastUpdateMs };
+}
+
+/**
+ * EEW データを NIED API から取得して renderEEW / renderEEWEpicenter に渡す
+ */
+async function pollEEW(eewEls, mapInst, eewMarkerRef, audioState, eewSoundState) {
+  try {
+    const ts  = buildEEWTimestamp(Date.now());
+    const src = `http://www.kmoni.bosai.go.jp/webservice/hypo/eew/${ts}.json`;
+    const res = await fetch(`/proxy?url=${encodeURIComponent(src)}`);
+    if (!res.ok) return;
+    const raw = await res.json();
+    const eew = parseEEW(raw);
+    renderEEW(eewEls, eew);
+    if (mapInst && eewMarkerRef) renderEEWEpicenter(mapInst, eewMarkerRef, eew);
+
+    if (audioState && eewSoundState && eew && !eew.isCancel && !eew.isTraining) {
+      const reportChanged = eew.reportId    !== eewSoundState.lastReportId;
+      const alertChanged  = eew.alertFlag   !== eewSoundState.lastAlertFlag;
+      if (reportChanged || alertChanged) {
+        if (audioState.unlocked) {
+          const snd = eew.alertFlag === '警報'
+            ? audioState.eewSounds[1]
+            : audioState.eewSounds[0];
+          snd.currentTime = 0;
+          snd.play().catch(e => console.warn('[EEW Audio]', e));
+        }
+        eewSoundState.lastReportId  = eew.reportId;
+        eewSoundState.lastAlertFlag = eew.alertFlag;
+      }
+    }
+    if (eewSoundState && !eew) {
+      eewSoundState.lastReportId  = null;
+      eewSoundState.lastAlertFlag = null;
+    }
+  } catch (e) {
+    console.warn('[EEW]', e.message);
+  }
+}
+
+/**
+ * このHTML固有のDOM要素を収集して initRealtimeMap に渡す config を組み立てる
+ */
+function collectRtmEls(root = document, soundPaths = RTM_DEFAULT_SOUND_PATHS) {
+  const $ = id =>
+    typeof root.getElementById === 'function'
+      ? root.getElementById(id)
+      : root.querySelector('#' + id);
+
+  return {
+    mapEl:      $('rtm-map'),
+    legendEl:   $('rtm-legend-items'),
+    soundPaths,
+    els: {
+      indicator:   $('rtm-fetch-indicator'),
+      errorMsg:    $('rtm-error-msg'),
+      clock:       $('rtm-clock'),
+      detail:      $('rtm-detail-content'),
+      alertBlock:  $('rtm-alert-block'),
+      alertMsg:    $('rtm-alert-msg'),
+      audioBtn:    $('rtm-audio-toggle'),
+      statTotal:   $('rtm-stat-total'),
+      statActive:  $('rtm-stat-active'),
+      statMax:     $('rtm-stat-max'),
+      statMaxName: $('rtm-stat-max-name'),
+    },
+  };
+}
+
+/**
+ * collectRtmEls を拡張して EEW / 上位5位要素も含む config を返す
+ */
+function collectRtmElsFull(root = document, soundPaths = RTM_DEFAULT_SOUND_PATHS) {
+  const base = collectRtmEls(root, soundPaths);
+  const $ = id =>
+    typeof root.getElementById === 'function'
+      ? root.getElementById(id)
+      : root.querySelector('#' + id);
+  return {
+    ...base,
+    top5El: $('rtm-top5-list'),
+    eewEls: {
+      panel:     $('rtm-eew-panel'),
+      intensity: $('rtm-eew-intensity'),
+      reportNum: $('rtm-eew-report-num'),
+      region:    $('rtm-eew-region'),
+      mag:       $('rtm-eew-mag'),
+      depth:     $('rtm-eew-depth'),
+      time:      $('rtm-eew-time'),
+    },
+  };
+}
+
+/**
+ * リアルタイムマップモジュールを初期化する（MapLibre GL JS）
+ */
+function initRealtimeMap(config) {
+  const {
+    mapEl,
+    legendEl,
+    els,
+    soundPaths,
+    mapOptions = {},
+  } = config;
+
+  const {
+    center = RTM_DEFAULT_MAP_OPTIONS.center,
+    zoom   = RTM_DEFAULT_MAP_OPTIONS.zoom,
+  } = mapOptions;
+
+  // MapLibre マップ初期化（center は [lon, lat] 順）
+  const mapInst = new maplibregl.Map({
+    container: mapEl,
+    style: CARTO_DARK_STYLE,
+    center: [center[1], center[0]],  // [lon, lat]
+    zoom,
+  });
+  mapInst.addControl(new maplibregl.NavigationControl(), 'top-right');
+  addDualScaleBar(mapInst);
+
+  const LABEL_ZOOM_THRESHOLD = 9;
+  let stationsCache = [];
+
+  mapInst.on('load', () => {
+    // 観測点 GeoJSON ソース + circle レイヤー
+    mapInst.addSource('stations', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+    });
+    mapInst.addLayer({
+      id: 'stations',
+      type: 'circle',
+      source: 'stations',
+      paint: {
+        'circle-radius':       ['get', 'radius'],
+        'circle-color':        ['get', 'color'],
+        'circle-opacity':      ['get', 'opacity'],
+        'circle-stroke-color': ['get', 'strokeColor'],
+        'circle-stroke-width': ['get', 'strokeWidth'],
+      },
+    });
+
+    // グラチキュール
+    addGraticule(mapInst);
+
+    // ズームイベント: zoom-high クラス制御 + マーカー再描画
+    mapInst.on('zoomend', () => {
+      const z = mapInst.getZoom();
+      mapInst.getContainer().classList.toggle('zoom-high', z >= LABEL_ZOOM_THRESHOLD);
+      if (stationsCache.length) {
+        updateStationsSource(mapInst, stationsCache, z, state.selectedCode);
+      }
+    });
+
+    // Tooltip（観測点ホバー）
+    let tooltip = null;
+    mapInst.on('mouseenter', 'stations', e => {
+      const p = e.features[0].properties;
+      const siLabel = p.shindo != null ? parseFloat(p.shindo).toFixed(1) : '観測なし';
+      tooltip = new maplibregl.Popup({
+        closeButton: false, closeOnClick: false, offset: [0, -6],
+      })
+        .setLngLat(e.lngLat)
+        .setHTML(`<div class="rtm-station-tooltip"><b>${p.name}</b><br>code: ${p.code}<br>RI = ${siLabel}</div>`)
+        .addTo(mapInst);
+      mapInst.getCanvas().style.cursor = 'pointer';
+    });
+    mapInst.on('mouseleave', 'stations', () => {
+      if (tooltip) { tooltip.remove(); tooltip = null; }
+      mapInst.getCanvas().style.cursor = '';
+    });
+
+    // 観測点クリック
+    mapInst.on('click', 'stations', e => {
+      const p = e.features[0].properties;
+      state.selectedCode = p.code;
+      updateDetailPanel(els.detail, {
+        code: p.code,
+        name: p.name,
+        shindo: p.shindo != null ? parseFloat(p.shindo) : null,
+      }, shindoToColor);
+    });
+  });
+
+  buildLegend(legendEl, LEGEND_ENTRIES, shindoToColor);
+
+  const audioState = {
+    sounds:    soundPaths.map(p => new Audio(p)),
+    eewSounds: [new Audio('/sounds/EEW1.wav'), new Audio('/sounds/EEW2.wav')],
+    unlocked:  false,
+  };
+
+  els.audioBtn.addEventListener('click', () => {
+    if (!audioState.unlocked) {
+      Promise.all(audioState.sounds.map(s => {
+        s.volume = 0;
+        return s.play().then(() => { s.pause(); s.currentTime = 0; s.volume = 1.0; });
+      })).then(() => {
+        audioState.unlocked      = true;
+        els.audioBtn.textContent = '🔔 音声ON';
+        els.audioBtn.className   = 'btn rtm-audio-btn enabled';
+        console.info('[Audio] アンロック完了。自動再生が許可されました。');
+      }).catch(e => console.warn('[Audio] アンロック失敗:', e));
+    } else {
+      audioState.unlocked      = false;
+      els.audioBtn.textContent = '🔇 音声OFF';
+      els.audioBtn.className   = 'btn rtm-audio-btn';
+      console.info('[Audio] 音声アラートを無効化しました。');
+    }
+  });
+
+  const state = {
+    selectedCode:  null,
+    alertLevel:    null,
+    lastUpdateMs:  null,
+  };
+
+  const eewMarkerRef = { marker: null };
+
+  async function poll() {
+    try {
+      const res  = await fetch('/api/shindo?_=' + Date.now());
+      const data = await res.json();
+      const next = onShindoData(mapInst, data, state, els, audioState);
+      state.alertLevel   = next.alertLevel;
+      state.lastUpdateMs = next.lastUpdateMs;
+      stationsCache = data.stations ?? [];
+
+      if (config.top5El) {
+        renderTop5(config.top5El, calcTop5(stationsCache), shindoToColor);
+      }
+    } catch (e) {
+      updateFetchStatus(els.indicator, els.errorMsg, {
+        status:  'error',
+        message: `通信エラー: ${e.message}`,
+      });
+    }
+  }
+
+  function tick() {
+    if (isStale(state.lastUpdateMs, Date.now(), 5000)) {
+      updateFetchStatus(els.indicator, els.errorMsg, { status: 'stale', message: '' });
+    }
+  }
+
+  return { mapInst, poll, tick, getStations: () => stationsCache, eewMarkerRef, audioState };
+}
+
+
+// ============================================================
+// スタンドアロン実行ブロック
+// ─────────────────────────────────────────────────────────────
+// QuakeView_personal に統合する場合はこのブロックを削除し、
+// 既存メインループから rtm.poll() / rtm.tick() / pollEEW() を呼ぶこと。
+//
+// ── 統合手順（5ステップ）─────────────────────────────────────
+//
+//  STEP 1: このHTML の DOM を personal レイアウトに配置する
+//
+//  STEP 2: ホストページの初期化関数内で collectRtmElsFull を呼び出す
+//          const config = collectRtmElsFull(document);
+//          const rtm    = initRealtimeMap(config);
+//
+//  STEP 3: 既存ループに poll / tick / pollEEW を組み込む
+//          function existingMainLoop() {
+//            rtm.poll();
+//            rtm.tick();
+//            pollEEW(config.eewEls);
+//          }
+//
+//  STEP 4: rtm_additions.css + § EEW セクション を quakeview.css に append
+//
+//  STEP 5: /proxy エンドポイントがサーバーに実装済みであることを確認
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+  const config       = collectRtmElsFull(document);
+  const eewEls       = config.eewEls;
+  const rtm          = initRealtimeMap(config);
+  const eewSoundState = { lastReportId: null, lastAlertFlag: null };
+
+  // 初回即時取得
+  rtm.poll();
+  pollEEW(eewEls, rtm.mapInst, rtm.eewMarkerRef, rtm.audioState, eewSoundState);
+
+  // 定期更新（1秒ごと）
+  // QuakeView_personal 統合時はこの setInterval を削除し、
+  // 既存ループ内で rtm.poll() / rtm.tick() / pollEEW() を呼び出すこと
+  setInterval(() => {
+    rtm.poll();
+    rtm.tick();
+    pollEEW(eewEls, rtm.mapInst, rtm.eewMarkerRef, rtm.audioState, eewSoundState);
+  }, 1000);
+});
+
+/* ═══ 統合ガイド ═══════════════════════════════════════════════
+  読み込む場所  : personal.html の <script src="web/realtime_map.html"> に相当する形で組み込む
+  呼び出す場所  : 既存ループの tick() 内 + pollEEW(eewEls) を並列呼び出し
+  渡す引数      : collectRtmElsFull(root) の戻り値（mapEl / eewEls / top5El を含む）
+  追加するDOM   : <div id="rtm-eew-panel"> / <div id="rtm-top5-list"> を左サイドバーに配置
+  プロキシ要件  : サーバーの /proxy?url= エンドポイントが必要（CORS 回避）
+════════════════════════════════════════════════════════════════ */
+</script>
+</body>
+</html>

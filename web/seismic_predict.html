@@ -1,0 +1,457 @@
+<!-- Created: 2026-05-26 JST -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>震度分布予測 AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="../css/quakeview.css">
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+</head>
+<body class="rtm-body">
+
+<!-- ── ヘッダー ──────────────────────────────────────────────── -->
+<header class="rtm-header">
+  <h1>震度分布予測 AI <small>Cross-Attention Transformer</small></h1>
+  <div class="rtm-status-bar">
+    <input id="pred-lat"   type="text" value="40.0" placeholder="緯度"   style="width:90px" title="10進: 38.10  60進: 38°6' 38°6'0&quot;">
+    <input id="pred-lon"   type="text" value="140.0" placeholder="経度"   style="width:94px" title="10進: 142.86  60進: 142°51'36&quot;">
+    <input id="pred-depth" type="number" step="1" value="10" placeholder="深さ km" style="width:72px" title="震源深さ km（例: 24）">
+    <input id="pred-mag"   type="number" step="0.1" value="5.0" placeholder="M"      style="width:54px" title="マグニチュード（例: 9.0）">
+    <button id="pred-run-btn">予測実行</button>
+    <span id="pred-status" style="font-family:var(--mono);font-size:10px;color:var(--text-mid)"></span>
+    <span id="pred-model-info" style="font-family:var(--mono);font-size:10px;color:var(--dim);margin-left:auto"></span>
+  </div>
+</header>
+
+<!-- ── メインエリア ──────────────────────────────────────────── -->
+<div class="rtm-main">
+
+  <!-- 左サイドバー -->
+  <aside class="rtm-sidebar">
+
+    <span class="section-label">震源情報</span>
+    <div id="pred-src-info">
+      <p class="rtm-placeholder">パラメータを入力して予測実行</p>
+    </div>
+
+    <hr class="rtm-divider">
+
+    <span class="section-label">震度帯別観測点数</span>
+    <div id="pred-bands">
+      <p class="rtm-placeholder">—</p>
+    </div>
+
+    <hr class="rtm-divider">
+
+    <span class="section-label">上位5観測点</span>
+    <div id="pred-top5">
+      <p class="rtm-placeholder">—</p>
+    </div>
+
+    <hr class="rtm-divider">
+
+    <span class="section-label">観測点詳細</span>
+    <div id="pred-detail">
+      <p class="rtm-placeholder">地図上の点をクリック</p>
+    </div>
+
+  </aside>
+
+  <!-- Leaflet マップ -->
+  <div class="rtm-map-wrap">
+    <div id="pred-map" class="rtm-map-area"></div>
+  </div>
+
+</div>
+
+<script>
+'use strict';
+
+// ── 初期データ（predict.py --json なし実行時に注入） ─────────
+const PRED_DATA = null; /* __PRED_DATA__ */
+
+// ── 観測点名マスター ──────────────────────────────────────────
+let STATION_NAMES = {};
+fetch('../web/data/station_names.json')
+  .then(r => r.ok ? r.json() : {})
+  .then(d => { STATION_NAMES = d; })
+  .catch(() => {});
+
+function stationDisplayName(id) {
+  return STATION_NAMES[id] || id;
+}
+
+
+// ============================================================
+// 定数
+// ============================================================
+
+const INTENSITY_SCALE = [
+  { lo: 6.5, label: '7',  color: '#770077' },
+  { lo: 6.0, label: '6強', color: '#990000' },
+  { lo: 5.5, label: '6弱', color: '#cc0000' },
+  { lo: 5.0, label: '5強', color: '#ff3300' },
+  { lo: 4.5, label: '5弱', color: '#ff6600' },
+  { lo: 3.5, label: '4',  color: '#ff9900' },
+  { lo: 2.5, label: '3',  color: '#ffff00' },
+  { lo: 1.5, label: '2',  color: '#22cc55' },
+  { lo: 0.5, label: '1',  color: '#00aaee' },
+  { lo: -Infinity, label: '0', color: '#444c56' },
+];
+
+
+// ============================================================
+// ① 純粋ロジック関数
+// ============================================================
+
+function intensityEntry(val) {
+  return INTENSITY_SCALE.find(s => val >= s.lo) ?? INTENSITY_SCALE[INTENSITY_SCALE.length - 1];
+}
+function intensityToColor(val) { return intensityEntry(val).color; }
+function intensityToLabel(val) { return intensityEntry(val).label; }
+function intensityToRadius(val) {
+  if (val >= 5.0) return 9;
+  if (val >= 3.5) return 7;
+  if (val >= 2.5) return 5;
+  if (val >= 0.5) return 4;
+  return 3;
+}
+
+function calcBands(stations) {
+  return INTENSITY_SCALE.map((s, i) => ({
+    label: s.label, color: s.color, lo: s.lo,
+    count: stations.filter(st =>
+      st.intensity >= s.lo &&
+      (i === 0 || st.intensity < INTENSITY_SCALE[i - 1].lo)
+    ).length,
+  })).filter(b => b.count > 0);
+}
+
+function calcTopN(stations, n = 5) {
+  return [...stations].sort((a, b) => b.intensity - a.intensity).slice(0, n);
+}
+
+function fmt2(v) { return (+v).toFixed(2); }
+function fmt1(v) { return (+v).toFixed(1); }
+
+function parseCoord(s) {
+  if (s == null) return NaN;
+  s = s.trim().replace(/\s+/g, '');
+  const dm = s.match(/^(-?\d+)[°度](\d+(?:\.\d+)?)[′'']?$/);
+  if (dm) {
+    const deg = parseFloat(dm[1]);
+    const min = parseFloat(dm[2]);
+    const sign = deg < 0 ? -1 : 1;
+    return sign * (Math.abs(deg) + min / 60);
+  }
+  const dms = s.match(/^(-?\d+)[°度](\d+)[′''](\d+(?:\.\d+)?)[″""]$/);
+  if (dms) {
+    const deg = parseFloat(dms[1]);
+    const min = parseFloat(dms[2]);
+    const sec = parseFloat(dms[3]);
+    const sign = deg < 0 ? -1 : 1;
+    return sign * (Math.abs(deg) + min / 60 + sec / 3600);
+  }
+  return parseFloat(s);
+}
+
+
+// ============================================================
+// ② 描画関数
+// ============================================================
+
+function renderSrcInfo(el, meta) {
+  const rows = [
+    ['緯度',  `${fmt2(meta.lat)} °N`],
+    ['経度',  `${fmt2(meta.lon)} °E`],
+    ['深さ',  `${meta.depth} km`],
+    ['規模',  `M ${fmt1(meta.mag)}`],
+    ['最大震度', fmt2(Math.max(...(meta._stations || [0]).map(s => s.intensity ?? 0)))],
+  ];
+  el.innerHTML = rows.map(([name, val]) =>
+    `<div class="rtm-stat-row"><span>${name}</span><span class="rtm-stat-val">${val}</span></div>`
+  ).join('');
+}
+
+function renderBands(el, bands) {
+  if (!bands.length) { el.innerHTML = '<p class="rtm-placeholder">—</p>'; return; }
+  const maxCount = Math.max(...bands.map(b => b.count));
+  el.innerHTML = bands.map(b => {
+    const barW = Math.max(2, Math.round(b.count / maxCount * 80));
+    return `<div class="pred-band-row">` +
+      `<span class="pred-band-swatch" style="background:${b.color}"></span>` +
+      `<span class="pred-band-label">震度${b.label}</span>` +
+      `<span class="pred-band-count">${b.count.toLocaleString()}</span>` +
+      `<span class="pred-band-bar" style="width:${barW}px;background:${b.color}"></span>` +
+    `</div>`;
+  }).join('');
+}
+
+function renderTop5(el, topStations) {
+  if (!topStations.length) { el.innerHTML = '<p class="rtm-placeholder">—</p>'; return; }
+  el.innerHTML = topStations.map(st => {
+    const color = intensityToColor(st.intensity);
+    return `<div class="rtm-top5-item">` +
+      `<span class="rtm-top5-swatch" style="background:${color}"></span>` +
+      `<span class="rtm-top5-name">${stationDisplayName(st.id)}</span>` +
+      `<span class="rtm-top5-val" style="color:${color}">${fmt2(st.intensity)}</span>` +
+    `</div>`;
+  }).join('');
+}
+
+function renderDetail(el, station) {
+  if (!station) { el.innerHTML = '<p class="rtm-placeholder">地図上の点をクリック</p>'; return; }
+  const color = intensityToColor(station.intensity);
+  el.innerHTML =
+    `<div class="rtm-detail-row">` +
+      `<span class="rtm-detail-name">${stationDisplayName(station.id)}</span>` +
+      `<span class="rtm-detail-si" style="color:${color}">震度${intensityToLabel(station.intensity)}</span>` +
+    `</div>` +
+    `<div class="rtm-detail-row"><span class="rtm-detail-name">計測震度</span>` +
+      `<span class="rtm-detail-si" style="color:${color}">${fmt2(station.intensity)}</span></div>` +
+    `<div class="rtm-detail-row"><span class="rtm-detail-name">緯度</span>` +
+      `<span class="rtm-detail-si">${fmt2(station.lat)} °N</span></div>` +
+    `<div class="rtm-detail-row"><span class="rtm-detail-name">経度</span>` +
+      `<span class="rtm-detail-si">${fmt2(station.lon)} °E</span></div>`;
+}
+
+function renderEpicenter(mapInst, meta) {
+  const el = document.createElement('div');
+  el.innerHTML = '<span class="pred-epicenter">★</span>';
+  el.style.cssText = 'pointer-events:none;';
+  const popup = new maplibregl.Popup({ offset: [0, -14], closeButton: false })
+    .setHTML(`震源 M${fmt1(meta.mag)} 深さ${meta.depth}km`);
+  return new maplibregl.Marker({ element: el, anchor: 'center' })
+    .setLngLat([meta.lon, meta.lat])
+    .setPopup(popup)
+    .addTo(mapInst);
+}
+
+function renderStations(mapInst, stations, onSelect) {
+  // 震度順にソート（高震度を後に追加 → 前面表示）
+  const sorted = [...stations].sort((a, b) => a.intensity - b.intensity);
+
+  const features = sorted.map(st => ({
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [st.lon, st.lat] },
+    properties: {
+      id:          st.id,
+      intensity:   st.intensity,
+      lat:         st.lat,
+      lon:         st.lon,
+      color:       intensityToColor(st.intensity),
+      radius:      intensityToRadius(st.intensity),
+      strokeColor: st.intensity >= 0.5 ? '#111' : '#333',
+      fillOpacity: st.intensity >= 0.5 ? 0.90 : 0.55,
+    },
+  }));
+
+  if (mapInst.getSource('pred-stations')) {
+    mapInst.getSource('pred-stations').setData({ type: 'FeatureCollection', features });
+    return;
+  }
+
+  mapInst.addSource('pred-stations', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features },
+  });
+  mapInst.addLayer({
+    id: 'pred-stations',
+    type: 'circle',
+    source: 'pred-stations',
+    paint: {
+      'circle-radius':        ['get', 'radius'],
+      'circle-color':         ['get', 'color'],
+      'circle-opacity':       ['get', 'fillOpacity'],
+      'circle-stroke-color':  ['get', 'strokeColor'],
+      'circle-stroke-width':  0.5,
+    },
+  });
+
+  // ホバー時ポップアップ
+  let hoverPopup = null;
+  mapInst.on('mouseenter', 'pred-stations', e => {
+    mapInst.getCanvas().style.cursor = 'pointer';
+    const props = e.features[0].properties;
+    const coords = e.features[0].geometry.coordinates;
+    if (hoverPopup) hoverPopup.remove();
+    hoverPopup = new maplibregl.Popup({ closeButton: false, offset: [0, -4] })
+      .setLngLat(coords)
+      .setHTML(`<b>${stationDisplayName(props.id)}</b><br>計測震度 ${fmt2(props.intensity)}`)
+      .addTo(mapInst);
+  });
+  mapInst.on('mouseleave', 'pred-stations', () => {
+    mapInst.getCanvas().style.cursor = '';
+    if (hoverPopup) { hoverPopup.remove(); hoverPopup = null; }
+  });
+
+  mapInst.on('click', 'pred-stations', e => {
+    const props = e.features[0].properties;
+    onSelect({ id: props.id, intensity: props.intensity, lat: props.lat, lon: props.lon });
+  });
+}
+
+
+// ============================================================
+// ③ エントリ関数
+// ============================================================
+
+function collectEls(root = document) {
+  const $ = id => root.getElementById(id);
+  return {
+    lat: $('pred-lat'), lon: $('pred-lon'),
+    depth: $('pred-depth'), mag: $('pred-mag'),
+    runBtn: $('pred-run-btn'), status: $('pred-status'),
+    srcInfo: $('pred-src-info'), bands: $('pred-bands'),
+    top5: $('pred-top5'), detail: $('pred-detail'),
+    mapEl: $('pred-map'),
+    modelInfo: $('pred-model-info'),
+  };
+}
+
+/** MapLibre マップを初期化し、データを受け取って再描画できる viewer を返す */
+function initViewer(mapEl, detailEl) {
+  const CARTO_STYLE = {
+    version: 8,
+    sources: { carto: {
+      type: 'raster',
+      tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
+      tileSize: 256,
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+    }},
+    layers: [{ id: 'carto', type: 'raster', source: 'carto' }],
+  };
+
+  const mapInst = new maplibregl.Map({
+    container: mapEl,
+    style: CARTO_STYLE,
+    center: [136.0, 36.5],
+    zoom: 5,
+  });
+  mapInst.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+  // 震源マーカーはカスタム DOM 要素なので配列で管理
+  let epicenterMarkers = [];
+
+  function render(data) {
+    renderDetail(detailEl, null);
+    // 既存震源マーカーを削除
+    epicenterMarkers.forEach(m => m.remove());
+    epicenterMarkers = [];
+
+    const doRender = () => {
+      const marker = renderEpicenter(mapInst, data.meta);
+      epicenterMarkers.push(marker);
+      renderStations(mapInst, data.stations, st => renderDetail(detailEl, st));
+    };
+
+    if (mapInst.isStyleLoaded()) {
+      doRender();
+    } else {
+      mapInst.once('load', doRender);
+    }
+  }
+
+  return { render };
+}
+
+/** サイドバーをデータで更新する */
+function updateSidebar(els, data) {
+  data.meta._stations = data.stations;
+  renderSrcInfo(els.srcInfo, data.meta);
+  renderBands(els.bands, calcBands(data.stations));
+  renderTop5(els.top5, calcTopN(data.stations, 5));
+  const m = data.meta;
+  if (m.model_exp) {
+    els.modelInfo.textContent = `Model: ${m.model_exp} epoch${m.model_epoch} (MAE=${m.model_val_mae})`;
+  }
+}
+
+/** /api/predict を呼んで結果を返す */
+async function fetchPrediction(lat, lon, depth, mag) {
+  const res = await fetch('/api/predict', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ lat, lon, depth, mag }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.json();
+}
+
+/** 予測ボタンのクリックハンドラ */
+function onRunClick(els, viewer) {
+  const lat   = parseCoord(els.lat.value);
+  const lon   = parseCoord(els.lon.value);
+  const depth = parseFloat(els.depth.value);
+  const mag   = parseFloat(els.mag.value);
+
+  if ([lat, lon, depth, mag].some(isNaN)) {
+    els.status.textContent = '⚠ 全項目を入力してください';
+    els.status.style.color = 'var(--red)';
+    return;
+  }
+
+  els.runBtn.disabled    = true;
+  els.status.textContent = '予測中...';
+  els.status.style.color = 'var(--amber)';
+
+  fetchPrediction(lat, lon, depth, mag)
+    .then(data => {
+      viewer.render(data);
+      updateSidebar(els, data);
+      els.status.textContent = `完了 ${data.meta.generated_at}`;
+      els.status.style.color = 'var(--teal)';
+    })
+    .catch(err => {
+      els.status.textContent = `エラー: ${err.message}`;
+      els.status.style.color = 'var(--red)';
+    })
+    .finally(() => { els.runBtn.disabled = false; });
+}
+
+/** 初期化 */
+function init() {
+  const els    = collectEls(document);
+  const viewer = initViewer(els.mapEl, els.detail);
+
+  els.runBtn.addEventListener('click', () => onRunClick(els, viewer));
+  els.lat.addEventListener('keydown',   e => { if (e.key === 'Enter') onRunClick(els, viewer); });
+  els.lon.addEventListener('keydown',   e => { if (e.key === 'Enter') onRunClick(els, viewer); });
+  els.depth.addEventListener('keydown', e => { if (e.key === 'Enter') onRunClick(els, viewer); });
+  els.mag.addEventListener('keydown',   e => { if (e.key === 'Enter') onRunClick(els, viewer); });
+
+  // predict.py --json なし で生成されたファイルの場合は初期データを表示
+  if (PRED_DATA) {
+    const m = PRED_DATA.meta;
+    els.lat.value   = m.lat;
+    els.lon.value   = m.lon;
+    els.depth.value = m.depth;
+    els.mag.value   = m.mag;
+    viewer.render(PRED_DATA);
+    updateSidebar(els, PRED_DATA);
+    els.status.textContent = m.generated_at;
+    els.status.style.color = 'var(--text-mid)';
+  }
+}
+
+
+// ============================================================
+// 実行
+// ============================================================
+document.addEventListener('DOMContentLoaded', init);
+
+/* ═══ 統合ガイド ═══════════════════════════════════════════════
+  サーバー起動  : python QuakeView/server/quakeview_proxy.py
+  アクセス      : http://localhost:8765/web/seismic_predict.html
+  APIエンドポイント: POST /api/predict  { lat, lon, depth, mag }
+════════════════════════════════════════════════════════════════ */
+</script>
+</body>
+</html>
